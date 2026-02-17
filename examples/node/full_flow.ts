@@ -61,24 +61,34 @@ function resolveMcpEndpoint(rawBaseUrl: string, explicitEndpoint: string): strin
   return `${base}/api/mcp`;
 }
 
-async function issueMcpToken(params: {
-  tokenUrl: string;
-  clientId: string;
-  clientSecret: string;
-  userId: number;
+async function requestBootstrapByEmail(params: {
+  requestUrl: string;
+  email: string;
+}): Promise<any> {
+  const resp = await fetch(params.requestUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email: params.email }),
+  });
+  const text = await resp.text();
+  const json = text ? JSON.parse(text) : {};
+  if (!resp.ok) {
+    throw new Error(`Failed to request bootstrap token (${resp.status}): ${text}`);
+  }
+  return json;
+}
+
+async function exchangeBootstrapToken(params: {
+  exchangeUrl: string;
+  bootstrapToken: string;
   accessTtlSec: number;
-  refreshTtlSec: number;
 }): Promise<any> {
   const body: Record<string, any> = {
-    grant_type: 'client_credentials',
-    client_id: params.clientId,
-    client_secret: params.clientSecret,
-    sub: params.userId,
+    bootstrap_token: params.bootstrapToken,
   };
   if (params.accessTtlSec > 0) body.ttl_sec = params.accessTtlSec;
-  if (params.refreshTtlSec > 0) body.refresh_ttl_sec = params.refreshTtlSec;
 
-  const resp = await fetch(params.tokenUrl, {
+  const resp = await fetch(params.exchangeUrl, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -86,49 +96,10 @@ async function issueMcpToken(params: {
   const text = await resp.text();
   const json = text ? JSON.parse(text) : {};
   if (!resp.ok) {
-    throw new Error(`Failed to issue token (${resp.status}): ${text}`);
+    throw new Error(`Failed to exchange bootstrap token (${resp.status}): ${text}`);
   }
   if (!firstString(json?.access_token)) {
-    throw new Error(`Token endpoint returned no access_token: ${text}`);
-  }
-  return json;
-}
-
-async function registerMcpClient(params: {
-  registerUrl: string;
-  bootstrapToken: string;
-  userId: number;
-  clientId: string;
-  displayName: string;
-  scope: string;
-  accessTtlSec: number;
-  refreshTtlSec: number;
-}): Promise<any> {
-  const body: Record<string, any> = { auto_issue_token: true };
-  if (params.userId > 0) body.fixed_sub = params.userId;
-  if (params.clientId) body.client_id = params.clientId;
-  if (params.displayName) body.display_name = params.displayName;
-  if (params.scope) body.scope = params.scope;
-  if (params.accessTtlSec > 0) body.ttl_sec = params.accessTtlSec;
-  if (params.refreshTtlSec > 0) body.refresh_ttl_sec = params.refreshTtlSec;
-
-  const resp = await fetch(params.registerUrl, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${params.bootstrapToken}`,
-    },
-    body: JSON.stringify(body),
-  });
-  const text = await resp.text();
-  const json = text ? JSON.parse(text) : {};
-  if (!resp.ok) {
-    throw new Error(`Failed to register MCP client (${resp.status}): ${text}`);
-  }
-  const clientId = firstString(json?.client_id, json?.client?.client_id);
-  const clientSecret = firstString(json?.client_secret);
-  if (!clientId || !clientSecret) {
-    throw new Error(`Register endpoint returned invalid credentials: ${text}`);
+    throw new Error(`Bootstrap exchange returned no access_token: ${text}`);
   }
   return json;
 }
@@ -330,69 +301,48 @@ async function main(): Promise<void> {
   const baseUrlInput = trimSlash(process.env.MCP_BASE_URL || 'https://taopochta.ru/api/mcp');
   const endpoint = resolveMcpEndpoint(baseUrlInput, firstString(process.env.MCP_ENDPOINT));
   const apiBaseUrl = deriveApiBaseUrl(baseUrlInput);
-  const tokenUrl = firstString(process.env.MCP_TOKEN_URL, `${apiBaseUrl}/api/mcp/token`);
-  const registerUrl = firstString(
-    process.env.MCP_REGISTER_URL,
-    `${apiBaseUrl}/api/mcp/clients/register`,
+  const bootstrapRequestUrl = firstString(
+    process.env.MCP_BOOTSTRAP_REQUEST_URL,
+    `${apiBaseUrl}/api/mcp/bootstrap/email/request`,
+  );
+  const bootstrapExchangeUrl = firstString(
+    process.env.MCP_BOOTSTRAP_EXCHANGE_URL,
+    `${apiBaseUrl}/api/mcp/bootstrap/email/exchange`,
   );
   const userIdRaw = firstString(process.env.MCP_USER_ID);
   let userId = toInt(userIdRaw || Date.now(), Date.now());
-  const bootstrapToken = firstString(process.env.MCP_BOOTSTRAP_USER_TOKEN);
-  const autoRegisterClient = ['1', 'true', 'yes', 'on'].includes(
-    firstString(process.env.MCP_AUTO_REGISTER_CLIENT, 'true').toLowerCase(),
-  );
-  let clientId = firstString(process.env.MCP_CLIENT_ID);
-  let clientSecret = firstString(process.env.MCP_CLIENT_SECRET);
-  const registerClientId = firstString(process.env.MCP_REGISTER_CLIENT_ID);
-  const registerDisplayName = firstString(process.env.MCP_REGISTER_DISPLAY_NAME, `mcp_node_${userId}`);
-  const registerScope = firstString(process.env.MCP_REGISTER_SCOPE);
+  const bootstrapEmail = firstString(
+    process.env.MCP_BOOTSTRAP_EMAIL,
+    process.env.MCP_AGENT_EMAIL,
+  ).toLowerCase();
+  let bootstrapToken = firstString(process.env.MCP_BOOTSTRAP_TOKEN);
   const accessTokenTtlSec = toInt(process.env.MCP_ACCESS_TOKEN_TTL_SEC, 0);
-  const refreshTokenTtlSec = toInt(process.env.MCP_REFRESH_TOKEN_TTL_SEC, 0);
   let token = firstString(process.env.MCP_TOKEN);
   const providedSub = token ? decodeJwtSubUnsafe(token) : NaN;
-  const bootstrapSub = bootstrapToken ? decodeJwtSubUnsafe(bootstrapToken) : NaN;
   if (Number.isFinite(providedSub)) {
     userId = providedSub;
-  } else if (!userIdRaw && Number.isFinite(bootstrapSub)) {
-    userId = bootstrapSub;
   }
   if (!token) {
-    if (!clientId || !clientSecret) {
-      if (autoRegisterClient && bootstrapToken) {
-        const registerResp = await registerMcpClient({
-          registerUrl,
-          bootstrapToken,
-          userId,
-          clientId: registerClientId,
-          displayName: registerDisplayName,
-          scope: registerScope,
-          accessTtlSec: accessTokenTtlSec,
-          refreshTtlSec: refreshTokenTtlSec,
-        });
-        clientId = firstString(registerResp?.client_id, registerResp?.client?.client_id);
-        clientSecret = firstString(registerResp?.client_secret);
-        token = firstString(registerResp?.token_bundle?.access_token, registerResp?.access_token);
-        console.log('[auth] mcp client self-registered:', clientId);
-      } else {
-        throw new Error(
-          'MCP_TOKEN is not set. Provide MCP_CLIENT_ID/MCP_CLIENT_SECRET or MCP_BOOTSTRAP_USER_TOKEN.',
-        );
-      }
-    }
-    if (!token) {
-      if (!clientId || !clientSecret) {
-        throw new Error('Unable to resolve client credentials after self-register.');
-      }
-      const tokenResp = await issueMcpToken({
-        tokenUrl,
-        clientId,
-        clientSecret,
-        userId,
+    if (bootstrapToken) {
+      const exchangeResp = await exchangeBootstrapToken({
+        exchangeUrl: bootstrapExchangeUrl,
+        bootstrapToken,
         accessTtlSec: accessTokenTtlSec,
-        refreshTtlSec: refreshTokenTtlSec,
       });
-      token = tokenResp.access_token;
-      console.log('[auth] token issued by /api/mcp/token');
+      token = firstString(exchangeResp?.access_token);
+      console.log('[auth] token issued by bootstrap exchange endpoint');
+    } else if (bootstrapEmail) {
+      await requestBootstrapByEmail({
+        requestUrl: bootstrapRequestUrl,
+        email: bootstrapEmail,
+      });
+      throw new Error(
+        'Bootstrap token was requested by email. Set MCP_BOOTSTRAP_TOKEN from email and re-run.',
+      );
+    } else {
+      throw new Error(
+        'MCP_TOKEN is not set. Provide MCP_BOOTSTRAP_EMAIL + MCP_BOOTSTRAP_TOKEN.',
+      );
     }
   }
   const finalSub = decodeJwtSubUnsafe(token);

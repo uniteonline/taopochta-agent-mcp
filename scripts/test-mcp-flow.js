@@ -117,6 +117,22 @@ async function askTxHash(stepLabel, interactive) {
   }
 }
 
+async function askBootstrapToken(interactive) {
+  if (!interactive) return '';
+  if (!process.stdin.isTTY) {
+    console.log('[auth] interactive bootstrap token input requires TTY.');
+    return '';
+  }
+  while (true) {
+    const answer = await promptText(
+      '[auth] Paste bootstrap token from email (mbt_...), then Enter, or type "skip": ',
+    );
+    if (!answer || answer.toLowerCase() === 'skip') return '';
+    if (answer.startsWith('mbt_')) return answer;
+    console.log('[auth] Invalid bootstrap token format, please retry.');
+  }
+}
+
 function ensureToolSuccess(stepName, payload) {
   if (payload && payload.success === false) {
     const message = firstString(payload.error, payload.message, `${stepName} failed`);
@@ -154,56 +170,33 @@ async function postJson(url, body, headers, timeoutMs) {
   }
 }
 
-async function issueMcpToken(params) {
-  const body = {
-    grant_type: 'client_credentials',
-    client_id: params.clientId,
-    client_secret: params.clientSecret,
-    sub: params.userId,
-  };
-  if (params.ttlSec > 0) body.ttl_sec = params.ttlSec;
-  if (params.refreshTtlSec > 0) body.refresh_ttl_sec = params.refreshTtlSec;
-
-  const tokenResp = await postJson(params.tokenUrl, body, {}, params.timeoutMs);
-  const accessToken = firstString(tokenResp?.access_token);
-  if (!accessToken) {
-    throw new Error(`Token endpoint did not return access_token: ${JSON.stringify(tokenResp)}`);
+async function requestBootstrapByEmail(params) {
+  if (!params.bootstrapEmail) {
+    throw new Error('bootstrapEmail is required for bootstrap request');
   }
-  return tokenResp;
-}
-
-async function registerMcpClient(params) {
-  const body = {};
-  if (params.clientId) body.client_id = params.clientId;
-  if (params.displayName) body.display_name = params.displayName;
-  if (params.scope) body.scope = params.scope;
-  if (params.userId > 0) body.fixed_sub = params.userId;
-  body.auto_issue_token = true;
-  if (params.ttlSec > 0) body.ttl_sec = params.ttlSec;
-  if (params.refreshTtlSec > 0) body.refresh_ttl_sec = params.refreshTtlSec;
-
-  const registerResp = await postJson(
-    params.registerUrl,
-    body,
+  return postJson(
+    params.bootstrapRequestUrl,
     {
-      authorization: `Bearer ${params.bootstrapToken}`,
+      email: params.bootstrapEmail,
     },
+    {},
     params.timeoutMs,
   );
+}
 
-  const clientId = firstString(registerResp?.client_id, registerResp?.client?.client_id);
-  const clientSecret = firstString(registerResp?.client_secret);
-  const tokenBundle = registerResp?.token_bundle || {};
-  const accessToken = firstString(tokenBundle?.access_token, registerResp?.access_token);
-  if (!clientId || !clientSecret) {
-    throw new Error(`Client register endpoint did not return client credentials: ${JSON.stringify(registerResp)}`);
-  }
-  return {
-    clientId,
-    clientSecret,
-    accessToken,
-    raw: registerResp,
+async function exchangeBootstrapToken(params) {
+  const body = {
+    bootstrap_token: params.bootstrapToken,
   };
+  if (params.ttlSec > 0) body.ttl_sec = params.ttlSec;
+  const exchangeResp = await postJson(params.bootstrapExchangeUrl, body, {}, params.timeoutMs);
+  const accessToken = firstString(exchangeResp?.access_token);
+  if (!accessToken) {
+    throw new Error(
+      `Bootstrap exchange endpoint did not return access_token: ${JSON.stringify(exchangeResp)}`,
+    );
+  }
+  return exchangeResp;
 }
 
 async function getJson(url, headers, timeoutMs) {
@@ -604,19 +597,13 @@ Core flow covered:
 Options:
   --baseUrl              API base url (default: https://taopochta.ru/api/mcp)
   --endpoint             MCP endpoint path/url (default: auto resolve /api/mcp)
-  --tokenUrl             Token endpoint url (default: <apiBaseUrl>/api/mcp/token)
-  --registerUrl          Client register endpoint (default: <apiBaseUrl>/api/mcp/clients/register)
+  --bootstrapRequestUrl  Bootstrap request endpoint (default: <apiBaseUrl>/api/mcp/bootstrap/email/request)
+  --bootstrapExchangeUrl Bootstrap exchange endpoint (default: <apiBaseUrl>/api/mcp/bootstrap/email/exchange)
+  --bootstrapEmail       Email to request bootstrap token (or MCP_BOOTSTRAP_EMAIL)
+  --bootstrapToken       Bootstrap token from email (or MCP_BOOTSTRAP_TOKEN)
   --interactive          Prompt for tx_hash when missing (default: true)
-  --token                Bearer token. If omitted, script requests one from /api/mcp/token.
-  --clientId             OAuth client id for token endpoint (or MCP_CLIENT_ID)
-  --clientSecret         OAuth client secret for token endpoint (or MCP_CLIENT_SECRET)
-  --bootstrapToken       Logged-in user bearer token (or MCP_BOOTSTRAP_USER_TOKEN) for self-register flow
-  --autoRegisterClient   Auto call /api/mcp/clients/register when client credentials are missing (default: true)
-  --registerClientId     Optional custom client_id for self-register
-  --registerDisplayName  Optional display_name for self-register
-  --registerScope        Optional scope for self-register (default: mcp:tools)
-  --tokenTtlSec          Optional access token ttl_sec for /api/mcp/token
-  --refreshTtlSec        Optional refresh_ttl_sec for /api/mcp/token
+  --token                Bearer token. If omitted, script resolves via bootstrap flow.
+  --tokenTtlSec          Optional access token ttl_sec for bootstrap exchange
   --newUser              Auto-generate new userId when --token/--userId are absent (default: true)
   --userId               User ID for token/bootstrap. If omitted and --newUser=true, generated per run.
   --userName             Display name for MCP create_user bootstrap
@@ -657,7 +644,8 @@ Examples:
   node scripts/test-mcp-flow.js --shippingAddressId 1 --interactive true
   node scripts/test-mcp-flow.js --keyword earphones
   node scripts/test-mcp-flow.js --keyword earphones --createTxHash 0x...
-  node scripts/test-mcp-flow.js --bootstrapToken eyJ...
+  node scripts/test-mcp-flow.js --keyword watercup --bootstrapEmail agent@example.com
+  node scripts/test-mcp-flow.js --bootstrapToken mbt_xxx
   node scripts/test-mcp-flow.js --shippingAddressId 1 --endpoint /api/mcp/rpc
 `);
     return;
@@ -669,40 +657,29 @@ Examples:
     firstString(args.endpoint, process.env.MCP_ENDPOINT),
   );
   const apiBaseUrl = deriveApiBaseUrl(baseUrlInput);
-  const tokenUrl = firstString(
-    args.tokenUrl,
-    process.env.MCP_TOKEN_URL,
-    `${apiBaseUrl}/api/mcp/token`,
+  const bootstrapRequestUrl = firstString(
+    args.bootstrapRequestUrl,
+    process.env.MCP_BOOTSTRAP_REQUEST_URL,
+    `${apiBaseUrl}/api/mcp/bootstrap/email/request`,
   );
-  const registerUrl = firstString(
-    args.registerUrl,
-    process.env.MCP_REGISTER_URL,
-    `${apiBaseUrl}/api/mcp/clients/register`,
+  const bootstrapExchangeUrl = firstString(
+    args.bootstrapExchangeUrl,
+    process.env.MCP_BOOTSTRAP_EXCHANGE_URL,
+    `${apiBaseUrl}/api/mcp/bootstrap/email/exchange`,
   );
   const interactive = isTruthy(firstString(args.interactive, process.env.MCP_INTERACTIVE, 'true'));
   const timeoutMs = toInt(args.timeoutMs || process.env.MCP_TIMEOUT_MS, 30000);
   const rawProvidedToken = firstString(args.token, process.env.MCP_TOKEN);
-  const bootstrapToken = firstString(
+  let bootstrapToken = firstString(
     args.bootstrapToken,
-    args.bootstrapUserToken,
-    process.env.MCP_BOOTSTRAP_USER_TOKEN,
+    process.env.MCP_BOOTSTRAP_TOKEN,
   );
-  const autoRegisterClient = isTruthy(
-    firstString(args.autoRegisterClient, process.env.MCP_AUTO_REGISTER_CLIENT, 'true'),
-  );
-  let clientId = firstString(args.clientId, process.env.MCP_CLIENT_ID);
-  let clientSecret = firstString(args.clientSecret, process.env.MCP_CLIENT_SECRET);
-  const registerClientId = firstString(args.registerClientId, process.env.MCP_REGISTER_CLIENT_ID);
-  const registerDisplayName = firstString(
-    args.registerDisplayName,
-    process.env.MCP_REGISTER_DISPLAY_NAME,
-  );
-  const registerScope = firstString(args.registerScope, process.env.MCP_REGISTER_SCOPE);
+  const bootstrapEmail = firstString(
+    args.bootstrapEmail,
+    process.env.MCP_BOOTSTRAP_EMAIL,
+    process.env.MCP_AGENT_EMAIL,
+  ).toLowerCase();
   const tokenTtlSec = toInt(firstString(args.tokenTtlSec, process.env.MCP_ACCESS_TOKEN_TTL_SEC), 0);
-  const refreshTtlSec = toInt(
-    firstString(args.refreshTtlSec, process.env.MCP_REFRESH_TOKEN_TTL_SEC),
-    0,
-  );
   const newUser = isTruthy(firstString(args.newUser, process.env.MCP_NEW_USER, 'true'));
   const explicitUserId = toPositiveIntOrNaN(firstString(args.userId, process.env.MCP_USER_ID));
   const shippingAddressIdArg = toPositiveIntOrNaN(
@@ -717,11 +694,8 @@ Examples:
   let userId = Number.isFinite(explicitUserId) ? explicitUserId : 1;
   let userIdAutoGenerated = false;
   const tokenSub = rawProvidedToken ? decodeJwtSubUnsafe(rawProvidedToken) : NaN;
-  const bootstrapSub = bootstrapToken ? decodeJwtSubUnsafe(bootstrapToken) : NaN;
   if (Number.isFinite(explicitUserId)) {
     userId = explicitUserId;
-  } else if (!rawProvidedToken && Number.isFinite(bootstrapSub)) {
-    userId = bootstrapSub;
   } else if (!rawProvidedToken && newUser) {
     userId = generateTestUserId();
     userIdAutoGenerated = true;
@@ -731,10 +705,6 @@ Examples:
   if (rawProvidedToken && Number.isFinite(tokenSub) && Number.isFinite(explicitUserId) && tokenSub !== explicitUserId) {
     userId = tokenSub;
     console.log('[auth] token sub does not match --userId. Using token sub for MCP calls.');
-  }
-  if (!rawProvidedToken && Number.isFinite(bootstrapSub) && Number.isFinite(explicitUserId) && bootstrapSub !== explicitUserId) {
-    userId = bootstrapSub;
-    console.log('[auth] bootstrap token sub does not match --userId. Using bootstrap token sub for MCP calls.');
   }
   const userName = firstString(args.userName, process.env.MCP_USER_NAME, '');
   const addressState = firstString(args.addressState, process.env.MCP_ADDRESS_STATE, 'Moscow');
@@ -768,50 +738,48 @@ Examples:
   let token = rawProvidedToken;
   let tokenSource = rawProvidedToken ? 'provided' : '';
   if (!token) {
-    if (!clientId || !clientSecret) {
-      if (autoRegisterClient && bootstrapToken) {
-        const registerResp = await registerMcpClient({
-          registerUrl,
-          bootstrapToken,
-          clientId: registerClientId,
-          displayName: registerDisplayName || `mcp_script_${userId}`,
-          scope: registerScope,
-          userId,
-          ttlSec: tokenTtlSec,
-          refreshTtlSec,
-          timeoutMs,
-        });
-        clientId = registerResp.clientId;
-        clientSecret = registerResp.clientSecret;
-        token = registerResp.accessToken;
-        printJson('[auth] registeredClient', {
-          client_id: clientId,
-          has_access_token: Boolean(token),
-        });
-        tokenSource = 'self_registered';
-      } else {
-        throw new Error(
-          'MCP_TOKEN is not provided. Please set MCP_CLIENT_ID/MCP_CLIENT_SECRET or MCP_BOOTSTRAP_USER_TOKEN for self-register.',
-        );
-      }
-    }
-    if (!token) {
-      if (!clientId || !clientSecret) {
-        throw new Error('Failed to resolve client credentials for token issue.');
-      }
-      const tokenResp = await issueMcpToken({
-        tokenUrl,
-        clientId,
-        clientSecret,
-        userId,
+    if (bootstrapToken) {
+      const exchangeResp = await exchangeBootstrapToken({
+        bootstrapExchangeUrl,
+        bootstrapToken,
         ttlSec: tokenTtlSec,
-        refreshTtlSec,
         timeoutMs,
       });
-      token = tokenResp.access_token;
-      tokenSource = tokenSource || 'issued_by_server';
-      console.log('[auth] token not provided, obtained access token from /api/mcp/token.');
+      token = exchangeResp.access_token;
+      tokenSource = 'bootstrap_exchanged';
+      console.log('[auth] token not provided, exchanged bootstrap token.');
+    } else if (bootstrapEmail) {
+      const requestResp = await requestBootstrapByEmail({
+        bootstrapRequestUrl,
+        bootstrapEmail,
+        timeoutMs,
+      });
+      printJson('[auth] bootstrapRequest', requestResp);
+      bootstrapToken = await askBootstrapToken(interactive);
+      if (!bootstrapToken) {
+        throw new Error(
+          'Bootstrap token is required after email request. Set MCP_BOOTSTRAP_TOKEN or run interactive mode and paste token from email.',
+        );
+      }
+      const exchangeResp = await exchangeBootstrapToken({
+        bootstrapExchangeUrl,
+        bootstrapToken,
+        ttlSec: tokenTtlSec,
+        timeoutMs,
+      });
+      token = exchangeResp.access_token;
+      tokenSource = 'bootstrap_email_flow';
+      console.log('[auth] requested bootstrap token by email and exchanged for access token.');
+    } else {
+      throw new Error(
+        'MCP_TOKEN is not provided. Use MCP_BOOTSTRAP_EMAIL + MCP_BOOTSTRAP_TOKEN flow.',
+      );
     }
+  }
+
+  const finalSub = token ? decodeJwtSubUnsafe(token) : NaN;
+  if (!Number.isFinite(explicitUserId) && Number.isFinite(finalSub)) {
+    userId = finalSub;
   }
 
   const headers = { authorization: `Bearer ${token}` };
@@ -825,8 +793,8 @@ Examples:
   printJson('mode', mcp.mode);
   printJson('apiBaseUrl', apiBaseUrl);
   printJson('endpoint', mcp.endpoint);
-  printJson('tokenUrl', tokenUrl);
-  printJson('registerUrl', registerUrl);
+  printJson('bootstrapRequestUrl', bootstrapRequestUrl);
+  printJson('bootstrapExchangeUrl', bootstrapExchangeUrl);
   printJson('newUser', newUser);
   printJson('userId', userId);
   printJson('userIdAutoGenerated', userIdAutoGenerated);
@@ -841,9 +809,8 @@ Examples:
   printJson('itemResource', itemResource);
   printJson('detailLanguage', detailLanguage);
   printJson('interactive', interactive);
-  printJson('tokenSource', tokenSource || 'issued_by_server');
-  printJson('clientId', clientId || null);
-  printJson('autoRegisterClient', autoRegisterClient);
+  printJson('tokenSource', tokenSource || 'provided');
+  printJson('bootstrapEmail', bootstrapEmail || null);
   printJson('bootstrapTokenProvided', Boolean(bootstrapToken));
   printJson('buyerWallet', buyerWallet || null);
   printJson('initialize', mcp.initialize);

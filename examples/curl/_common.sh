@@ -4,15 +4,9 @@ set -euo pipefail
 MCP_BASE_URL="${MCP_BASE_URL:-https://taopochta.ru/api/mcp}"
 MCP_ENDPOINT="${MCP_ENDPOINT:-}"
 MCP_USER_ID="${MCP_USER_ID:-$(date +%s)}"
-MCP_CLIENT_ID="${MCP_CLIENT_ID:-}"
-MCP_CLIENT_SECRET="${MCP_CLIENT_SECRET:-}"
-MCP_BOOTSTRAP_USER_TOKEN="${MCP_BOOTSTRAP_USER_TOKEN:-}"
-MCP_AUTO_REGISTER_CLIENT="${MCP_AUTO_REGISTER_CLIENT:-true}"
-MCP_REGISTER_CLIENT_ID="${MCP_REGISTER_CLIENT_ID:-}"
-MCP_REGISTER_DISPLAY_NAME="${MCP_REGISTER_DISPLAY_NAME:-}"
-MCP_REGISTER_SCOPE="${MCP_REGISTER_SCOPE:-}"
+MCP_BOOTSTRAP_EMAIL="${MCP_BOOTSTRAP_EMAIL:-${MCP_AGENT_EMAIL:-}}"
+MCP_BOOTSTRAP_TOKEN="${MCP_BOOTSTRAP_TOKEN:-}"
 MCP_ACCESS_TOKEN_TTL_SEC="${MCP_ACCESS_TOKEN_TTL_SEC:-}"
-MCP_REFRESH_TOKEN_TTL_SEC="${MCP_REFRESH_TOKEN_TTL_SEC:-}"
 MCP_TOKEN="${MCP_TOKEN:-}"
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -42,8 +36,8 @@ else
   MCP_RPC_URL="${default_rpc_url}"
 fi
 
-MCP_TOKEN_URL="${MCP_TOKEN_URL:-${MCP_API_BASE_URL%/}/api/mcp/token}"
-MCP_REGISTER_URL="${MCP_REGISTER_URL:-${MCP_API_BASE_URL%/}/api/mcp/clients/register}"
+MCP_BOOTSTRAP_REQUEST_URL="${MCP_BOOTSTRAP_REQUEST_URL:-${MCP_API_BASE_URL%/}/api/mcp/bootstrap/email/request}"
+MCP_BOOTSTRAP_EXCHANGE_URL="${MCP_BOOTSTRAP_EXCHANGE_URL:-${MCP_API_BASE_URL%/}/api/mcp/bootstrap/email/exchange}"
 
 decode_jwt_sub() {
   local token="$1"
@@ -61,69 +55,36 @@ decode_jwt_sub() {
 }
 
 if [[ -z "${MCP_TOKEN}" ]]; then
-  if [[ -z "${MCP_CLIENT_ID}" || -z "${MCP_CLIENT_SECRET}" ]]; then
-    auto_register_flag="$(echo "${MCP_AUTO_REGISTER_CLIENT}" | tr '[:upper:]' '[:lower:]')"
-    if [[ "${auto_register_flag}" =~ ^(1|true|yes|on)$ ]] && [[ -n "${MCP_BOOTSTRAP_USER_TOKEN}" ]]; then
-      register_body="$(jq -nc \
-        --arg client_id "${MCP_REGISTER_CLIENT_ID}" \
-        --arg display_name "${MCP_REGISTER_DISPLAY_NAME}" \
-        --arg scope "${MCP_REGISTER_SCOPE}" \
-        --arg ttl "${MCP_ACCESS_TOKEN_TTL_SEC}" \
-        --arg refresh_ttl "${MCP_REFRESH_TOKEN_TTL_SEC}" \
-        '{
-          auto_issue_token: true
-        }
-        + (if ($client_id | length) > 0 then { client_id: $client_id } else {} end)
-        + (if ($display_name | length) > 0 then { display_name: $display_name } else {} end)
-        + (if ($scope | length) > 0 then { scope: $scope } else {} end)
-        + (if ($ttl | length) > 0 then { ttl_sec: ($ttl | tonumber) } else {} end)
-        + (if ($refresh_ttl | length) > 0 then { refresh_ttl_sec: ($refresh_ttl | tonumber) } else {} end)')"
-
-      register_resp="$(curl -sS "${MCP_REGISTER_URL}" \
-        -H "content-type: application/json" \
-        -H "authorization: Bearer ${MCP_BOOTSTRAP_USER_TOKEN}" \
-        -d "${register_body}")"
-
-      MCP_CLIENT_ID="$(echo "${register_resp}" | jq -r '.client_id // .client.client_id // empty')"
-      MCP_CLIENT_SECRET="$(echo "${register_resp}" | jq -r '.client_secret // empty')"
-      MCP_TOKEN="$(echo "${register_resp}" | jq -r '.token_bundle.access_token // .access_token // empty')"
-      if [[ -z "${MCP_CLIENT_ID}" || -z "${MCP_CLIENT_SECRET}" ]]; then
-        echo "Failed to self-register MCP client from ${MCP_REGISTER_URL}" >&2
-        echo "Response: ${register_resp}" >&2
-        exit 1
-      fi
-      echo "[auth] self-registered MCP client_id=${MCP_CLIENT_ID}"
-    else
-      echo "MCP_TOKEN is not set. Please set MCP_CLIENT_ID/MCP_CLIENT_SECRET or MCP_BOOTSTRAP_USER_TOKEN." >&2
-      exit 1
+  if [[ -z "${MCP_BOOTSTRAP_TOKEN}" && -n "${MCP_BOOTSTRAP_EMAIL}" ]]; then
+    request_body="$(jq -nc --arg email "${MCP_BOOTSTRAP_EMAIL}" '{email: $email}')"
+    request_resp="$(curl -sS "${MCP_BOOTSTRAP_REQUEST_URL}" \
+      -H "content-type: application/json" \
+      -d "${request_body}")"
+    echo "[auth] bootstrap request response: ${request_resp}"
+    if [[ -t 0 ]]; then
+      read -r -p "[auth] Paste bootstrap token from email (mbt_...): " MCP_BOOTSTRAP_TOKEN
     fi
   fi
 
-  if [[ -z "${MCP_TOKEN}" ]]; then
-    token_body="$(jq -nc \
-      --arg client_id "${MCP_CLIENT_ID}" \
-      --arg client_secret "${MCP_CLIENT_SECRET}" \
-      --argjson sub "${MCP_USER_ID}" \
+  if [[ -n "${MCP_BOOTSTRAP_TOKEN}" ]]; then
+    exchange_body="$(jq -nc \
+      --arg bootstrap_token "${MCP_BOOTSTRAP_TOKEN}" \
       --arg ttl "${MCP_ACCESS_TOKEN_TTL_SEC}" \
-      --arg refresh_ttl "${MCP_REFRESH_TOKEN_TTL_SEC}" \
-      '{
-        grant_type: "client_credentials",
-        client_id: $client_id,
-        client_secret: $client_secret,
-        sub: $sub
-      }
-      + (if ($ttl | length) > 0 then { ttl_sec: ($ttl | tonumber) } else {} end)
-      + (if ($refresh_ttl | length) > 0 then { refresh_ttl_sec: ($refresh_ttl | tonumber) } else {} end)')"
-
-    token_resp="$(curl -sS "${MCP_TOKEN_URL}" \
+      '{ bootstrap_token: $bootstrap_token }
+      + (if ($ttl | length) > 0 then { ttl_sec: ($ttl | tonumber) } else {} end)')"
+    exchange_resp="$(curl -sS "${MCP_BOOTSTRAP_EXCHANGE_URL}" \
       -H "content-type: application/json" \
-      -d "${token_body}")"
-    MCP_TOKEN="$(echo "${token_resp}" | jq -r '.access_token // empty')"
+      -d "${exchange_body}")"
+    MCP_TOKEN="$(echo "${exchange_resp}" | jq -r '.access_token // empty')"
     if [[ -z "${MCP_TOKEN}" ]]; then
-      echo "Failed to issue MCP token from ${MCP_TOKEN_URL}" >&2
-      echo "Response: ${token_resp}" >&2
+      echo "Failed to exchange bootstrap token at ${MCP_BOOTSTRAP_EXCHANGE_URL}" >&2
+      echo "Response: ${exchange_resp}" >&2
       exit 1
     fi
+    echo "[auth] obtained MCP token by bootstrap exchange."
+  else
+    echo "MCP_TOKEN is not set. Please provide MCP_BOOTSTRAP_EMAIL (+ MCP_BOOTSTRAP_TOKEN)." >&2
+    exit 1
   fi
 fi
 
@@ -132,10 +93,9 @@ if [[ -n "${decoded_sub}" && "${decoded_sub}" =~ ^[0-9]+$ ]]; then
   MCP_USER_ID="${decoded_sub}"
 fi
 
-export MCP_BASE_URL MCP_API_BASE_URL MCP_ENDPOINT MCP_RPC_URL MCP_TOKEN_URL MCP_USER_ID
-export MCP_CLIENT_ID MCP_CLIENT_SECRET MCP_ACCESS_TOKEN_TTL_SEC MCP_REFRESH_TOKEN_TTL_SEC
-export MCP_BOOTSTRAP_USER_TOKEN MCP_AUTO_REGISTER_CLIENT MCP_REGISTER_URL
-export MCP_REGISTER_CLIENT_ID MCP_REGISTER_DISPLAY_NAME MCP_REGISTER_SCOPE
+export MCP_BASE_URL MCP_API_BASE_URL MCP_ENDPOINT MCP_RPC_URL MCP_USER_ID
+export MCP_ACCESS_TOKEN_TTL_SEC
+export MCP_BOOTSTRAP_EMAIL MCP_BOOTSTRAP_TOKEN MCP_BOOTSTRAP_REQUEST_URL MCP_BOOTSTRAP_EXCHANGE_URL
 export MCP_TOKEN
 
 rpc() {
@@ -164,8 +124,8 @@ call_tool() {
 echo "[env] MCP_BASE_URL=${MCP_BASE_URL}"
 echo "[env] MCP_API_BASE_URL=${MCP_API_BASE_URL}"
 echo "[env] MCP_RPC_URL=${MCP_RPC_URL}"
-echo "[env] MCP_TOKEN_URL=${MCP_TOKEN_URL}"
-echo "[env] MCP_REGISTER_URL=${MCP_REGISTER_URL}"
+echo "[env] MCP_BOOTSTRAP_REQUEST_URL=${MCP_BOOTSTRAP_REQUEST_URL}"
+echo "[env] MCP_BOOTSTRAP_EXCHANGE_URL=${MCP_BOOTSTRAP_EXCHANGE_URL}"
 echo "[env] MCP_USER_ID=${MCP_USER_ID}"
-echo "[env] MCP_CLIENT_ID=${MCP_CLIENT_ID:-<not-set>}"
-echo "[env] MCP_BOOTSTRAP_USER_TOKEN=${MCP_BOOTSTRAP_USER_TOKEN:+<set>}"
+echo "[env] MCP_BOOTSTRAP_EMAIL=${MCP_BOOTSTRAP_EMAIL:-<not-set>}"
+echo "[env] MCP_BOOTSTRAP_TOKEN=${MCP_BOOTSTRAP_TOKEN:+<set>}"

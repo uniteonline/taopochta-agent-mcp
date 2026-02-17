@@ -6,7 +6,11 @@ info:
     OpenAPI wrapper for Taopochta MCP endpoint.
 
     MCP is transported over JSON-RPC 2.0 via HTTP POST.
-    Use `initialize`, `tools/list`, and `tools/call`.
+    Recommended auth flow for agents:
+
+    1) POST /api/mcp/bootstrap/email/request
+    2) POST /api/mcp/bootstrap/email/exchange
+    3) Use Authorization: Bearer <access_token> on /api/mcp
 
 servers:
   - url: https://taopochta.ru
@@ -20,7 +24,7 @@ paths:
       summary: MCP JSON-RPC endpoint
       description: |
         Accepts a JSON-RPC request object or batch array.
-        `tools/call` requires bearer token.
+        Typical methods: initialize, notifications/initialized, tools/list, tools/call.
       operationId: mcpRootPost
       security:
         - bearerAuth: []
@@ -86,7 +90,7 @@ paths:
   /api/mcp/rpc:
     post:
       summary: MCP JSON-RPC endpoint (alias)
-      description: Same behavior as `/api/mcp`.
+      description: Same behavior as /api/mcp.
       operationId: mcpRpcPost
       security:
         - bearerAuth: []
@@ -117,176 +121,56 @@ paths:
         '204':
           description: No content (notification)
 
-  /api/mcp/token:
+  /api/mcp/bootstrap/email/request:
     post:
-      summary: Issue or refresh MCP bearer token
+      summary: Request bootstrap token by email
       description: |
-        Issue short-lived access token with `grant_type=client_credentials`,
-        or refresh with `grant_type=refresh_token`.
-      operationId: mcpTokenIssue
+        Starts email bootstrap flow.
+        Server sends a 2-hour bootstrap token (mbt_...) to the email inbox.
+      operationId: mcpBootstrapEmailRequest
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/McpTokenRequest'
-            examples:
-              clientCredentials:
-                value:
-                  grant_type: client_credentials
-                  client_id: agent_demo
-                  client_secret: replace_me
-                  sub: 1771301696853
-                  ttl_sec: 900
-              refreshToken:
-                value:
-                  grant_type: refresh_token
-                  client_id: agent_demo
-                  client_secret: replace_me
-                  refresh_token: mrt_xxx
+              $ref: '#/components/schemas/McpBootstrapEmailRequest'
+            example:
+              email: agent@example.com
       responses:
         '200':
-          description: Token issued
+          description: Generic success response (anti-enumeration)
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/McpTokenResponse'
+                $ref: '#/components/schemas/McpBootstrapEmailRequestResponse'
         '400':
           description: Invalid request
-        '401':
-          description: Invalid client credentials or token
 
-  /api/mcp/token/revoke:
+  /api/mcp/bootstrap/email/exchange:
     post:
-      summary: Revoke refresh token
-      description: |
-        Revoke refresh token by `refresh_token` (recommended) or by `token_jti`.
-      operationId: mcpTokenRevoke
+      summary: Exchange bootstrap token for MCP access token
+      description: Exchange one-time bootstrap token (mbt_...) to MCP bearer token.
+      operationId: mcpBootstrapEmailExchange
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/McpTokenRevokeRequest'
-            examples:
-              revokeByRefreshToken:
-                value:
-                  client_id: agent_demo
-                  client_secret: replace_me
-                  refresh_token: mrt_xxx
-                  reason: risk-control logout
-              revokeByJti:
-                value:
-                  client_id: agent_demo
-                  client_secret: replace_me
-                  token_jti: 0123456789abcdef
+              $ref: '#/components/schemas/McpBootstrapEmailExchangeRequest'
+            example:
+              bootstrap_token: mbt_xxx
+              ttl_sec: 900
       responses:
         '200':
-          description: Revoke result
+          description: Access token issued
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/McpTokenRevokeResponse'
+                $ref: '#/components/schemas/McpBootstrapEmailExchangeResponse'
         '400':
           description: Invalid request
         '401':
-          description: Invalid client credentials
-
-  /api/mcp/clients/register:
-    post:
-      summary: Self-register MCP client credentials
-      description: |
-        Register a new MCP client for the current logged-in user and return one-time `client_secret`.
-        Requires a normal user bearer token (Google/Yandex/Telegram login token), not MCP client token.
-      operationId: mcpClientRegister
-      security:
-        - bearerAuth: []
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/McpClientRegisterRequest'
-      responses:
-        '200':
-          description: Client registered
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/McpClientRegisterResponse'
-        '400':
-          description: Invalid request
-        '401':
-          description: Unauthorized
-
-  /api/mcp/clients/list:
-    post:
-      summary: List my MCP clients
-      operationId: mcpClientList
-      security:
-        - bearerAuth: []
-      responses:
-        '200':
-          description: Client list
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/McpClientListResponse'
-        '401':
-          description: Unauthorized
-
-  /api/mcp/clients/rotate-secret:
-    post:
-      summary: Rotate MCP client secret
-      description: |
-        Rotate secret for a client owned by current user.
-        Returns one-time new `client_secret`.
-      operationId: mcpClientRotateSecret
-      security:
-        - bearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/McpClientRotateRequest'
-      responses:
-        '200':
-          description: Secret rotated
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/McpClientRotateResponse'
-        '400':
-          description: Invalid request
-        '401':
-          description: Unauthorized
-
-  /api/mcp/clients/revoke:
-    post:
-      summary: Revoke MCP client
-      description: |
-        Revoke a client owned by current user and revoke all refresh tokens of that client.
-      operationId: mcpClientRevoke
-      security:
-        - bearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/McpClientRevokeRequest'
-      responses:
-        '200':
-          description: Client revoked
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/McpClientRevokeResponse'
-        '400':
-          description: Invalid request
-        '401':
-          description: Unauthorized
+          description: Invalid or expired bootstrap token
 
 components:
   securitySchemes:
@@ -337,12 +221,12 @@ components:
           type: object
           additionalProperties: true
           description: |
-            For `tools/call`, result is:
-              {
-                content: [{ type: "text", text: "..." }],
-                structuredContent: { ...tool payload... },
-                isError: false|true
-              }
+            For tools/call, result typically includes:
+            {
+              content: [{ type: "text", text: "..." }],
+              structuredContent: { ...tool payload... },
+              isError: false|true
+            }
 
     JsonRpcError:
       type: object
@@ -361,43 +245,44 @@ components:
           properties:
             code:
               type: integer
-              description: JSON-RPC or application error code
             message:
               type: string
             data:
               nullable: true
 
-    McpTokenRequest:
+    McpBootstrapEmailRequest:
       type: object
-      required: [client_id, client_secret]
+      required: [email]
       properties:
-        grant_type:
+        email:
           type: string
-          enum: [client_credentials, refresh_token]
-          default: client_credentials
-        client_id:
+          format: email
+
+    McpBootstrapEmailRequestResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        status:
           type: string
-        client_secret:
+          example: ok
+        message:
           type: string
-        sub:
-          type: integer
-          minimum: 1
-          description: Required by client policy for client_credentials grant
-        user_id:
-          type: integer
-          minimum: 1
-          description: Alias of sub
-        refresh_token:
+          example: If the email is registered, a bootstrap token has been sent. Please check your inbox.
+
+    McpBootstrapEmailExchangeRequest:
+      type: object
+      required: [bootstrap_token]
+      properties:
+        bootstrap_token:
           type: string
-          description: Required when grant_type=refresh_token
+          description: One-time bootstrap token from email inbox
         ttl_sec:
           type: integer
           minimum: 1
-        refresh_ttl_sec:
-          type: integer
-          minimum: 1
+          description: Optional requested access token ttl
 
-    McpTokenResponse:
+    McpBootstrapEmailExchangeResponse:
       type: object
       properties:
         success:
@@ -412,265 +297,10 @@ components:
         expires_at:
           type: string
           format: date-time
-        refresh_token:
-          type: string
-        refresh_expires_in:
-          type: integer
-        refresh_expires_at:
-          type: string
-          format: date-time
         sub:
           type: integer
-        client_id:
-          type: string
         scope:
           type: string
-
-    McpTokenRevokeRequest:
-      type: object
-      required: [client_id, client_secret]
-      properties:
-        client_id:
+        provider:
           type: string
-        client_secret:
-          type: string
-        refresh_token:
-          type: string
-        token_jti:
-          type: string
-        sub:
-          type: integer
-          minimum: 1
-        user_id:
-          type: integer
-          minimum: 1
-        reason:
-          type: string
-          maxLength: 256
-
-    McpTokenRevokeResponse:
-      type: object
-      properties:
-        success:
-          type: boolean
-        client_id:
-          type: string
-        revoked_count:
-          type: integer
-        revoked:
-          type: array
-          items:
-            type: object
-            properties:
-              token_jti:
-                type: string
-              sub:
-                type: integer
-              scope:
-                type: string
-              expires_at:
-                type: string
-                format: date-time
-                nullable: true
-              rotated_at:
-                type: string
-                format: date-time
-                nullable: true
-              used_at:
-                type: string
-                format: date-time
-                nullable: true
-
-    McpClientInfo:
-      type: object
-      properties:
-        client_id:
-          type: string
-        owner_user_id:
-          type: integer
-        owner_email:
-          type: string
-        display_name:
-          type: string
-          nullable: true
-        fixed_sub:
-          type: integer
-        allowed_subs:
-          type: array
-          items:
-            type: integer
-        scope:
-          type: string
-        is_active:
-          type: boolean
-        created_at:
-          type: string
-          format: date-time
-          nullable: true
-        updated_at:
-          type: string
-          format: date-time
-          nullable: true
-        last_rotated_at:
-          type: string
-          format: date-time
-          nullable: true
-        revoked_at:
-          type: string
-          format: date-time
-          nullable: true
-
-    McpClientRegisterRequest:
-      type: object
-      properties:
-        client_id:
-          type: string
-          description: Optional custom client id
-        display_name:
-          type: string
-          maxLength: 160
-        fixed_sub:
-          type: integer
-          minimum: 1
-        allowed_subs:
-          type: array
-          items:
-            type: integer
-        scope:
-          type: string
-        auto_issue_token:
-          type: boolean
-          default: true
-        ttl_sec:
-          type: integer
-          minimum: 1
-        refresh_ttl_sec:
-          type: integer
-          minimum: 1
-
-    McpClientRegisterResponse:
-      type: object
-      properties:
-        success:
-          type: boolean
-        message:
-          type: string
-        client_id:
-          type: string
-        client_secret:
-          type: string
-          description: One-time visible secret
-        client:
-          $ref: '#/components/schemas/McpClientInfo'
-        token_bundle:
-          $ref: '#/components/schemas/McpTokenResponse'
-
-    McpClientListResponse:
-      type: object
-      properties:
-        success:
-          type: boolean
-        total:
-          type: integer
-        data:
-          type: array
-          items:
-            $ref: '#/components/schemas/McpClientInfo'
-
-    McpClientRotateRequest:
-      type: object
-      required: [client_id]
-      properties:
-        client_id:
-          type: string
-        auto_issue_token:
-          type: boolean
-          default: false
-        scope:
-          type: string
-        ttl_sec:
-          type: integer
-          minimum: 1
-        refresh_ttl_sec:
-          type: integer
-          minimum: 1
-
-    McpClientRotateResponse:
-      type: object
-      properties:
-        success:
-          type: boolean
-        message:
-          type: string
-        client_id:
-          type: string
-        client_secret:
-          type: string
-          description: One-time visible secret
-        client:
-          type: object
-          properties:
-            client_id:
-              type: string
-            fixed_sub:
-              type: integer
-            allowed_subs:
-              type: array
-              items:
-                type: integer
-            scope:
-              type: string
-            updated_at:
-              type: string
-              format: date-time
-              nullable: true
-            last_rotated_at:
-              type: string
-              format: date-time
-              nullable: true
-        token_bundle:
-          $ref: '#/components/schemas/McpTokenResponse'
-
-    McpClientRevokeRequest:
-      type: object
-      required: [client_id]
-      properties:
-        client_id:
-          type: string
-        reason:
-          type: string
-          maxLength: 256
-
-    McpClientRevokeResponse:
-      type: object
-      properties:
-        success:
-          type: boolean
-        client_id:
-          type: string
-        is_active:
-          type: boolean
-        revoked_at:
-          type: string
-          format: date-time
-          nullable: true
-        updated_at:
-          type: string
-          format: date-time
-          nullable: true
-        revoked_refresh_tokens:
-          type: integer
-
-  examples:
-    ToolsCallCreateEscrow:
-      summary: tools/call -> create_escrow
-      value:
-        jsonrpc: "2.0"
-        id: 10
-        method: tools/call
-        params:
-          name: create_escrow
-          arguments:
-            order_no: "394f22d4a49d245e"
-            token_symbol: "USDT"
-            buyer_wallet: "0xYourBuyerWalletAddress"
+          example: mcp_email_bootstrap

@@ -7,18 +7,16 @@
 ![Chain](https://img.shields.io/badge/Chain-BNB%20Smart%20Chain-F3BA2F?style=flat-square)
 ![Shipping](https://img.shields.io/badge/Shipping-Russia%20Only-orange?style=flat-square)
 
-Production-ready MCP integration kit for AI agents to run the full Taopochta flow:
+Production MCP kit for AI agents to run the full Taopochta flow:
 
 `search_products -> estimate_shipping -> create_order -> create_escrow -> fund_escrow -> confirm_receipt -> submit_tx -> get_order_proof`
 
-## Important
-
 Shipping is currently supported for **Russia only**.
 
-## What Is Included
+## What is inside
 
 - MCP API spec: `openapi.yaml`
-- End-to-end JS test script: `scripts/test-mcp-flow.js`
+- End-to-end test script: `scripts/test-mcp-flow.js`
 - Runnable examples:
   - `examples/curl/*.sh`
   - `examples/node/full_flow.ts`
@@ -28,93 +26,48 @@ Shipping is currently supported for **Russia only**.
 
 ```mermaid
 flowchart LR
-  A["Agent / Client"] --> B["MCP Endpoint (/api/mcp or /mcp)"]
-  B --> C["MCP Tool Router"]
-  C --> D["search_products"]
-  C --> E["estimate_shipping"]
-  C --> F["create_order"]
-  C --> G["create_escrow"]
-  C --> H["fund_escrow"]
-  C --> I["confirm_receipt"]
-  D --> J["Taopochta Product APIs"]
-  E --> K["Shipping Estimate API"]
-  F --> L["Order Service (server-side pricing)"]
-  G --> M["Escrow Contract (BSC)"]
-  H --> M
-  I --> M
-  M --> N["submit_tx + get_order_proof sync"]
-  N --> A
+  A["Agent / Client"] --> B["POST /api/mcp/bootstrap/email/request"]
+  B --> C["Email with 2h bootstrap token (mbt_...)"]
+  C --> D["POST /api/mcp/bootstrap/email/exchange"]
+  D --> E["MCP access token (Bearer)"]
+  E --> F["POST /api/mcp (JSON-RPC)"]
+  F --> G["search_products"]
+  F --> H["estimate_shipping"]
+  F --> I["create_order"]
+  F --> J["create_escrow / fund_escrow / confirm_receipt"]
+  J --> K["BSC on-chain tx + submit_tx"]
+  K --> L["get_order_proof"]
 ```
 
-## 15-Minute Quick Start
+## 15-minute quick start
 
-### 1) Server prerequisites
+### 1) Server endpoints
 
-Your API service should expose:
+Required:
 
 - `POST /api/mcp`
-- `POST /api/mcp/rpc` (optional alias)
-- `POST /api/mcp/token` (issue access token)
-- `POST /api/mcp/token/revoke` (revoke refresh token)
-- `POST /api/mcp/clients/register` (self-register MCP client)
-- `POST /api/mcp/clients/list` (list my MCP clients)
-- `POST /api/mcp/clients/rotate-secret` (self-rotate secret)
-- `POST /api/mcp/clients/revoke` (revoke MCP client)
+- `POST /api/mcp/bootstrap/email/request`
+- `POST /api/mcp/bootstrap/email/exchange`
 
-### 2) Environment (recommended)
+### 2) Environment
 
-Use direct MCP endpoint URL as default:
+Recommended (email bootstrap):
 
 ```bash
 export MCP_BASE_URL="https://taopochta.ru/api/mcp"
-export MCP_TOKEN_URL="https://taopochta.ru/api/mcp/token"
-export MCP_REGISTER_URL="https://taopochta.ru/api/mcp/clients/register"
-export MCP_BOOTSTRAP_USER_TOKEN="user_login_access_token"
-export MCP_USER_ID="$(date +%s)"
+export MCP_BOOTSTRAP_REQUEST_URL="https://taopochta.ru/api/mcp/bootstrap/email/request"
+export MCP_BOOTSTRAP_EXCHANGE_URL="https://taopochta.ru/api/mcp/bootstrap/email/exchange"
+export MCP_BOOTSTRAP_EMAIL="agent@example.com"
 export MCP_BUYER_WALLET="0xYourBuyerWalletAddress"
-```
-
-First-time self-service (recommended):
-
-1. Set `MCP_BOOTSTRAP_USER_TOKEN` (a normal user login token from your site login).
-2. Run the script without `MCP_CLIENT_ID/MCP_CLIENT_SECRET`.
-3. Script auto calls `/api/mcp/clients/register` and obtains MCP token.
-
-After you have persistent client credentials, you can switch to:
-
-```bash
-export MCP_CLIENT_ID="your_agent_client_id"
-export MCP_CLIENT_SECRET="your_agent_client_secret"
-unset MCP_BOOTSTRAP_USER_TOKEN
-```
-
-How to get `MCP_BOOTSTRAP_USER_TOKEN`:
-
-- Login on `taopochta.ru` with Google/Yandex/Telegram.
-- Use that normal login access token as `MCP_BOOTSTRAP_USER_TOKEN`.
-- It is only needed to create/rotate/revoke MCP client credentials.
-
-If your deployment uses root host + endpoint path:
-
-```bash
-export MCP_BASE_URL="https://taopochta.ru"
-export MCP_ENDPOINT="/api/mcp"
-```
-
-If you already have bearer token:
-
-```bash
-export MCP_TOKEN="eyJ..."
 ```
 
 PowerShell:
 
 ```powershell
 $env:MCP_BASE_URL="https://taopochta.ru/api/mcp"
-$env:MCP_TOKEN_URL="https://taopochta.ru/api/mcp/token"
-$env:MCP_REGISTER_URL="https://taopochta.ru/api/mcp/clients/register"
-$env:MCP_BOOTSTRAP_USER_TOKEN="user_login_access_token"
-$env:MCP_USER_ID=[int][double]::Parse((Get-Date -UFormat %s))
+$env:MCP_BOOTSTRAP_REQUEST_URL="https://taopochta.ru/api/mcp/bootstrap/email/request"
+$env:MCP_BOOTSTRAP_EXCHANGE_URL="https://taopochta.ru/api/mcp/bootstrap/email/exchange"
+$env:MCP_BOOTSTRAP_EMAIL="agent@example.com"
 $env:MCP_BUYER_WALLET="0xYourBuyerWalletAddress"
 ```
 
@@ -128,46 +81,62 @@ bash 02_tools_list.sh
 
 ### 4) Run full flow
 
-Interactive JS (manual wallet signing):
+Interactive JS (requests bootstrap token email, then asks you to paste `mbt_...`):
 
 ```bash
 cd ../../
-node scripts/test-mcp-flow.js --keyword watercup
+node scripts/test-mcp-flow.js --keyword watercup --bootstrapEmail agent@example.com
 ```
 
-TypeScript:
+Node example:
 
 ```bash
 cd examples/node
 npx tsx full_flow.ts
 ```
 
-Python:
+Python example:
 
 ```bash
 cd examples/python
 python full_flow.py
 ```
 
-## Canonical Payment Flow
+## Authentication model
+
+### Default (recommended): email bootstrap
+
+1. Agent calls `POST /api/mcp/bootstrap/email/request` with `email`.
+2. Server sends a **2-hour bootstrap token** to that mailbox.
+3. Agent calls `POST /api/mcp/bootstrap/email/exchange` with `bootstrap_token`.
+4. Agent receives MCP access token and uses it in `Authorization: Bearer ...`.
+
+Security behavior:
+
+- API does not reveal whether email exists.
+- Bootstrap token is single-use.
+- Token is stored hashed server-side (no plaintext in DB).
+- Issue/exchange events are auditable by IP and user-agent.
+
+## Canonical payment flow
 
 1. `search_products`
-2. `estimate_shipping` (must happen before order)
-3. `create_order` with `shipping_quote_id` (and `sku_id` when applicable)
+2. `estimate_shipping` (required before order)
+3. `create_order` with `shipping_quote_id` (and `sku_id` when needed)
 4. `create_escrow`
-5. Sign create tx in wallet
+5. Sign create tx
 6. `submit_tx(action=create, tx_hash=...)`
 7. `fund_escrow`
-8. Sign fund tx in wallet
+8. Sign fund tx
 9. `submit_tx(action=fund, tx_hash=...)`
 10. `confirm_receipt`
-11. Sign confirm tx in wallet
+11. Sign confirm tx
 12. `submit_tx(action=confirm, tx_hash=...)`
 13. `get_order_proof`
 
-Security rule: payment amount must come from server-side quote (`create_order` / escrow payload), not client-side arithmetic.
+Payment amount must come from server quote (`estimate_shipping` + `create_order`), never from client-side math.
 
-## Available MCP Tools
+## MCP tools
 
 1. `create_user`
 2. `list_addresses`
@@ -187,36 +156,26 @@ Security rule: payment amount must come from server-side quote (`create_order` /
 16. `submit_tx`
 17. `get_order_proof`
 
-## Environment Variables
+## Environment variables
 
 | Name | Required | Example | Purpose |
 |---|---|---|---|
 | `MCP_BASE_URL` | Yes | `https://taopochta.ru/api/mcp` | MCP endpoint URL (recommended) or host root |
 | `MCP_ENDPOINT` | No | `/api/mcp` | Needed only when `MCP_BASE_URL` is host root |
-| `MCP_TOKEN_URL` | No | `https://taopochta.ru/api/mcp/token` | Token issue endpoint |
-| `MCP_REGISTER_URL` | No | `https://taopochta.ru/api/mcp/clients/register` | Self-register endpoint |
-| `MCP_BOOTSTRAP_USER_TOKEN` | Yes** | `eyJ...` | Normal site login token for self-register |
-| `MCP_AUTO_REGISTER_CLIENT` | No | `true` | Auto register MCP client when creds missing |
-| `MCP_CLIENT_ID` | Yes* | `agent_demo` | MCP client id |
-| `MCP_CLIENT_SECRET` | Yes* | `replace_me` | MCP client secret |
-| `MCP_REGISTER_CLIENT_ID` | No | `agent_bot_a` | Optional custom client_id when self-registering |
-| `MCP_REGISTER_DISPLAY_NAME` | No | `My Agent Prod` | Optional display name for self-register |
-| `MCP_REGISTER_SCOPE` | No | `mcp:tools` | Optional scope for self-register |
-| `MCP_TOKEN` | Optional | `eyJ...` | Pre-issued bearer token (skip token issue call) |
-| `MCP_USER_ID` | Optional | `1771301696853` | `sub` claim used for token issuing |
+| `MCP_BOOTSTRAP_REQUEST_URL` | No | `https://taopochta.ru/api/mcp/bootstrap/email/request` | Request bootstrap token by email |
+| `MCP_BOOTSTRAP_EXCHANGE_URL` | No | `https://taopochta.ru/api/mcp/bootstrap/email/exchange` | Exchange `mbt_...` to access token |
+| `MCP_BOOTSTRAP_EMAIL` | Recommended | `agent@example.com` | Email used for bootstrap request |
+| `MCP_BOOTSTRAP_TOKEN` | Optional | `mbt_xxx` | Token from mailbox (if already obtained) |
+| `MCP_TOKEN` | Optional | `eyJ...` | Pre-issued bearer token |
+| `MCP_USER_ID` | Optional | `1771301696853` | User id hint for bootstrap tools |
 | `MCP_ACCESS_TOKEN_TTL_SEC` | Optional | `900` | Requested access-token TTL |
-| `MCP_REFRESH_TOKEN_TTL_SEC` | Optional | `2592000` | Requested refresh-token TTL |
 | `MCP_BUYER_WALLET` | BSC flow yes | `0x...` | Buyer wallet address |
 | `MCP_SKU_ID` | Optional | `5913730265710` | Force SKU for variant products |
 | `CREATE_TX_HASH` | Optional | `0x...` | Auto submit create tx |
 | `FUND_TX_HASH` | Optional | `0x...` | Auto submit fund tx |
 | `CONFIRM_TX_HASH` | Optional | `0x...` | Auto submit confirm tx |
 
-\* Required when `MCP_TOKEN` is not provided and self-register mode is not used.
-
-\** Required for first-time self-register mode when `MCP_CLIENT_ID/MCP_CLIENT_SECRET` are missing.
-
-## Repo Structure
+## Repository layout
 
 ```text
 taopochta-agent-mcp/
@@ -244,40 +203,34 @@ taopochta-agent-mcp/
 - `Transaction Hash not found`:
   - Usually canceled in wallet or not broadcast.
 - Escrow amount mismatch:
-  - Trust server quote from `create_order` and escrow tx payload only.
+  - Trust server quote and on-chain tx payload only.
 
 ---
 
 ## Русская версия
 
-`taopochta-agent-mcp` — это готовый набор для интеграции MCP, чтобы агент мог пройти полный процесс:
+`taopochta-agent-mcp` — это набор для интеграции MCP, чтобы агент прошел полный процесс:
+поиск товара -> расчет доставки -> создание заказа -> escrow -> оплата -> подтверждение получения -> on-chain proof.
 
-`поиск товара -> расчет доставки -> создание заказа -> создание/пополнение escrow -> подтверждение получения -> on-chain proof`
+Важно: доставка сейчас поддерживается **только по России**.
 
-### Важно
+Рекомендуемый вход:
 
-Доставка сейчас поддерживается только по России.
+1. `POST /api/mcp/bootstrap/email/request` с email.
+2. Получить bootstrap token (`mbt_...`) по почте.
+3. `POST /api/mcp/bootstrap/email/exchange`.
+4. Использовать `access_token` для `POST /api/mcp`.
 
-### Быстрый старт (15 минут)
+Быстрый старт:
 
-1. Убедитесь, что API публикует `POST /api/mcp`, `POST /api/mcp/token`, `POST /api/mcp/clients/register` (и при необходимости `/api/mcp/rpc`, `/api/mcp/token/revoke`).
-2. Задайте переменные окружения:
-   - `MCP_BASE_URL=https://taopochta.ru/api/mcp`
-   - `MCP_TOKEN_URL=https://taopochta.ru/api/mcp/token`
-   - `MCP_REGISTER_URL=https://taopochta.ru/api/mcp/clients/register`
-   - `MCP_BOOTSTRAP_USER_TOKEN=...`
-   - `MCP_BUYER_WALLET=0x...`
-3. Проверьте MCP:
-   - `bash examples/curl/01_initialize.sh`
-   - `bash examples/curl/02_tools_list.sh`
-4. Запустите полный сценарий:
-   - `node scripts/test-mcp-flow.js --keyword watercup`
-   - или `npx tsx examples/node/full_flow.ts`
-   - или `python examples/python/full_flow.py`
+- `MCP_BASE_URL=https://taopochta.ru/api/mcp`
+- `MCP_BOOTSTRAP_REQUEST_URL=https://taopochta.ru/api/mcp/bootstrap/email/request`
+- `MCP_BOOTSTRAP_EXCHANGE_URL=https://taopochta.ru/api/mcp/bootstrap/email/exchange`
+- `MCP_BOOTSTRAP_EMAIL=agent@example.com`
+- `MCP_BUYER_WALLET=0x...`
 
-### Рекомендуемая последовательность инструментов
+Запуск полного сценария:
 
-`search_products -> estimate_shipping -> create_order -> create_escrow -> fund_escrow -> confirm_receipt -> submit_tx -> get_order_proof`
-
-Если товар вариативный, обязательно передавайте `sku_id` в `estimate_shipping` и `create_order`.
-Сумма оплаты должна браться только из серверной котировки (`create_order`), а не вычисляться на клиенте.
+- `node scripts/test-mcp-flow.js --keyword watercup --bootstrapEmail agent@example.com`
+- или `npx tsx examples/node/full_flow.ts`
+- или `python examples/python/full_flow.py`
