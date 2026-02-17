@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MCP_BASE_URL="${MCP_BASE_URL:-http://127.0.0.1:3000}"
+MCP_BASE_URL="${MCP_BASE_URL:-https://taopochta.ru}"
 MCP_ENDPOINT="${MCP_ENDPOINT:-/api/mcp}"
 AUTH_TOKEN_SECRET="${AUTH_TOKEN_SECRET:-dev-secret}"
 MCP_USER_ID="${MCP_USER_ID:-$(date +%s)}"

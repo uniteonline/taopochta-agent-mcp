@@ -1,73 +1,73 @@
-﻿# Taopochta Agent MCP
+# Taopochta Agent MCP
 
 [![GitHub stars](https://img.shields.io/github/stars/uniteonline/taopochta-agent-mcp?style=flat-square)](https://github.com/uniteonline/taopochta-agent-mcp/stargazers)
 [![GitHub forks](https://img.shields.io/github/forks/uniteonline/taopochta-agent-mcp?style=flat-square)](https://github.com/uniteonline/taopochta-agent-mcp/network/members)
 [![GitHub issues](https://img.shields.io/github/issues/uniteonline/taopochta-agent-mcp?style=flat-square)](https://github.com/uniteonline/taopochta-agent-mcp/issues)
-![MCP](https://img.shields.io/badge/Protocol-MCP%20(JSON--RPC%202.0)-0A66C2?style=flat-square)
+![Protocol](https://img.shields.io/badge/Protocol-MCP%20(JSON--RPC%202.0)-0A66C2?style=flat-square)
 ![Chain](https://img.shields.io/badge/Chain-BNB%20Smart%20Chain-F3BA2F?style=flat-square)
 ![Shipping](https://img.shields.io/badge/Shipping-Russia%20Only-orange?style=flat-square)
 
-EN: A practical MCP integration kit for agents to run Taopochta cross-border order + escrow flows end-to-end.  
-中文：一个可直接落地的 MCP 集成套件，帮助 Agent 端到端打通 Taopochta 下单与托管支付流程。
+Production-ready MCP integration kit for AI agents to execute the full Taopochta workflow:
+product search -> shipping estimate -> order creation -> escrow create/fund/confirm -> on-chain proof sync.
 
-## Important / 重要说明
+## Important
 
-EN: **At this stage, shipping is supported for Russia only.**  
-中文：**目前只支持俄罗斯收货地址。**
+**Shipping is currently supported for Russia only.**
 
-## What This Repo Gives You / 你能拿到什么
+## What You Get
 
-EN:
-- MCP protocol docs (`openapi.yaml`)
-- Copy-paste runnable examples (curl / Node / Python)
-- End-to-end test script for create -> fund -> confirm flow
+- MCP protocol docs: `openapi.yaml`
+- End-to-end test script: `scripts/test-mcp-flow.js`
+- Runnable examples:
+  - `examples/curl/*.sh`
+  - `examples/node/full_flow.ts`
+  - `examples/python/full_flow.py`
 
-中文：
-- MCP 协议文档（`openapi.yaml`）
-- 可直接运行的示例（curl / Node / Python）
-- 覆盖 create -> fund -> confirm 的全流程测试脚本
+## 15-Minute Quick Start
 
-## 15-Minute Quick Start / 15 分钟快速上手
+### 1) Prerequisites
 
-### Step 0: Prerequisites / 前置条件
-
-EN:
-- API service is running and exposes:
+- API service exposes:
   - `POST /api/mcp`
   - `POST /api/mcp/rpc`
-- Node.js 18+ (for JS examples)
-- Python 3.9+ (for Python example)
-- If testing on BSC mainnet: wallet with BNB gas + USDT balance
+- Node.js 18+
+- Python 3.9+
+- BSC wallet with BNB gas + USDT (for payment flow)
 
-中文：
-- 已启动 API 服务，并提供：
-  - `POST /api/mcp`
-  - `POST /api/mcp/rpc`
-- Node.js 18+（运行 JS 示例）
-- Python 3.9+（运行 Python 示例）
-- 若测试 BSC 主网：钱包需有 BNB Gas 与 USDT 余额
-
-### Step 1: Set env / 配置环境变量
+### 2) Environment
 
 ```bash
-export MCP_BASE_URL="http://127.0.0.1:3000"
+export MCP_BASE_URL="https://taopochta.ru"
 export MCP_ENDPOINT="/api/mcp"
 export AUTH_TOKEN_SECRET="dev-secret"
 export MCP_USER_ID="$(date +%s)"
-export MCP_BUYER_WALLET="0x6818384322B0B49adD9568Fc7Fa7A1eb2bD566F2"
+export MCP_BUYER_WALLET="0xYourBuyerWalletAddress"
 ```
 
-Windows PowerShell:
+PowerShell:
 
 ```powershell
-$env:MCP_BASE_URL="http://127.0.0.1:3000"
+$env:MCP_BASE_URL="https://taopochta.ru"
 $env:MCP_ENDPOINT="/api/mcp"
 $env:AUTH_TOKEN_SECRET="dev-secret"
 $env:MCP_USER_ID=[int][double]::Parse((Get-Date -UFormat %s))
-$env:MCP_BUYER_WALLET="0x6818384322B0B49adD9568Fc7Fa7A1eb2bD566F2"
+$env:MCP_BUYER_WALLET="0xYourBuyerWalletAddress"
 ```
 
-### Step 2: Verify MCP alive / 验证 MCP 可用
+For local development only:
+
+```bash
+export MCP_BASE_URL="http://127.0.0.1:3000"
+```
+
+If you expose MCP through Nginx as `https://taopochta.ru/mcp`, set:
+
+```bash
+export MCP_BASE_URL="https://taopochta.ru"
+export MCP_ENDPOINT="/mcp"
+```
+
+### 3) Probe MCP
 
 ```bash
 cd examples/curl
@@ -75,37 +75,34 @@ bash 01_initialize.sh
 bash 02_tools_list.sh
 ```
 
-### Step 3: Run a full flow / 跑一条完整链路
+### 4) Run full flow
 
-Option A (JS test script, interactive with tx hash input):
+Interactive JS (recommended for manual wallet signing):
 
 ```bash
 cd ../../
 node scripts/test-mcp-flow.js --keyword watercup
 ```
 
-Option B (TypeScript one-click):
+TypeScript:
 
 ```bash
 cd examples/node
 npx tsx full_flow.ts
 ```
 
-Option C (Python one-click):
+Python:
 
 ```bash
 cd examples/python
 python full_flow.py
 ```
 
-EN: In normal production integration, your agent signs tx via wallet and then calls `submit_tx`.  
-中文：生产场景中，Agent 需要通过钱包签名交易，然后调用 `submit_tx` 回填链上交易哈希。
-
-## Architecture / 架构图
+## Architecture
 
 ```mermaid
 flowchart LR
-  A[Agent / Client] --> B[MCP Endpoint\n/api/mcp]
+  A[Agent / Client] --> B[MCP Endpoint /api/mcp]
   B --> C[Tool Router]
   C --> D[search_products]
   C --> E[estimate_shipping]
@@ -115,56 +112,68 @@ flowchart LR
   C --> I[confirm_receipt]
   D --> J[Taopochta Product APIs]
   E --> K[/api/items/shipping/estimate]
-  F --> L[Order Service\nserver-side amount source]
-  G --> M[Escrow Contract\nBNB Smart Chain]
+  F --> L[Order Service]
+  G --> M[Escrow Contract on BSC]
   H --> M
   I --> M
   M --> N[submit_tx + get_order_proof]
   N --> A
 ```
 
-## MCP Tools / 工具列表
+## Available MCP Tools
 
-| Tool | EN | 中文 |
-|---|---|---|
-| `create_user` | Create user profile | 创建用户 |
-| `list_addresses` | List shipping addresses | 查询地址列表 |
-| `create_address` | Create shipping address | 创建收货地址 |
-| `set_buyer_wallet` | Bind buyer wallet | 绑定买家钱包 |
-| `list_wallets` | List wallets by chain | 查询钱包列表 |
-| `search_products` | Search products | 搜索商品 |
-| `estimate_shipping` | Estimate domestic + international shipping | 计算国内/国际运费 |
-| `create_order` | Create order with shipping quote | 基于运费报价创建订单 |
-| `create_escrow` | Build escrow create tx request | 生成托管创建交易参数 |
-| `fund_escrow` | Build escrow funding tx request | 生成托管注资交易参数 |
-| `confirm_receipt` | Build receipt confirm tx request | 生成确认收货交易参数 |
-| `open_dispute` | Open dispute | 发起争议 |
-| `vote_dispute` | Vote on dispute | 争议投票 |
-| `execute_dispute` | Execute dispute result | 执行争议结果 |
-| `resolve_timeout` | Resolve timeout case | 处理超时单 |
-| `submit_tx` | Submit on-chain tx hash to backend | 回填链上交易哈希 |
-| `get_order_proof` | Query escrow/order proof | 查询订单链上证明 |
+1. `create_user`
+2. `list_addresses`
+3. `create_address`
+4. `set_buyer_wallet`
+5. `list_wallets`
+6. `search_products`
+7. `estimate_shipping`
+8. `create_order`
+9. `create_escrow`
+10. `fund_escrow`
+11. `confirm_receipt`
+12. `open_dispute`
+13. `vote_dispute`
+14. `execute_dispute`
+15. `resolve_timeout`
+16. `submit_tx`
+17. `get_order_proof`
 
-## Canonical Payment Flow / 标准支付流程
+## Canonical Payment Flow
 
 1. `search_products`
-2. `estimate_shipping` (must run before `create_order`)
-3. `create_order` (server stores quote + total)
+2. `estimate_shipping`
+3. `create_order` (must include `shipping_quote_id`, and `sku_id` when present)
 4. `create_escrow`
-5. Wallet sends create tx
+5. Sign create tx in wallet
 6. `submit_tx(action=create, tx_hash=...)`
 7. `fund_escrow`
-8. Wallet sends fund tx
+8. Sign fund tx in wallet
 9. `submit_tx(action=fund, tx_hash=...)`
 10. `confirm_receipt`
-11. Wallet sends confirm tx
+11. Sign confirm tx in wallet
 12. `submit_tx(action=confirm, tx_hash=...)`
 13. `get_order_proof`
 
-EN: Payment amount must come from server-side order quote, not client-side calculation.  
-中文：支付金额必须以服务端订单报价为准，不能由客户端自行计算。
+Security rule: payment amount must come from server-side order quote (`create_order`), not client-side math.
 
-## Repository Structure / 目录结构
+## Environment Variables
+
+| Name | Required | Example | Purpose |
+|---|---|---|---|
+| `MCP_BASE_URL` | Yes | `https://taopochta.ru` | API base URL |
+| `MCP_ENDPOINT` | No | `/api/mcp` | MCP endpoint path |
+| `AUTH_TOKEN_SECRET` | Local yes | `dev-secret` | JWT signing secret |
+| `MCP_TOKEN` | Optional | `eyJ...` | If unset, examples generate token |
+| `MCP_USER_ID` | Optional | `1771301696853` | JWT `sub` |
+| `MCP_BUYER_WALLET` | BSC flow yes | `0x...` | Buyer wallet |
+| `MCP_SKU_ID` | Optional | `5913730265710` | Override SKU if needed |
+| `CREATE_TX_HASH` | Optional | `0x...` | Auto submit create tx |
+| `FUND_TX_HASH` | Optional | `0x...` | Auto submit fund tx |
+| `CONFIRM_TX_HASH` | Optional | `0x...` | Auto submit confirm tx |
+
+## Repo Structure
 
 ```text
 taopochta-agent-mcp/
@@ -185,40 +194,49 @@ taopochta-agent-mcp/
       full_flow.py
 ```
 
-## Key Environment Variables / 关键环境变量
+## Troubleshooting
 
-| Name | Required | Example | Description |
-|---|---|---|---|
-| `MCP_BASE_URL` | Yes | `http://127.0.0.1:3000` | API base URL |
-| `MCP_ENDPOINT` | No | `/api/mcp` | MCP endpoint path |
-| `AUTH_TOKEN_SECRET` | Local yes | `dev-secret` | HS256 JWT signing secret |
-| `MCP_TOKEN` | Optional | `eyJ...` | If not set, examples generate token |
-| `MCP_USER_ID` | Optional | `1771301696853` | User id in token `sub` |
-| `MCP_BUYER_WALLET` | BSC flow yes | `0x...` | Buyer wallet address |
-| `CREATE_TX_HASH` | Optional | `0x...` | Auto submit create tx proof |
-| `FUND_TX_HASH` | Optional | `0x...` | Auto submit fund tx proof |
-| `CONFIRM_TX_HASH` | Optional | `0x...` | Auto submit confirm tx proof |
+- `estimate_shipping` has no `shipping_quote_id`
+  - Check address/shop/item (and `sku_id` for variant products).
+- `Transaction Hash not found`
+  - Usually canceled in wallet or never broadcast.
+- Escrow amount mismatch
+  - Trust server quote from `create_order` only.
 
-## Troubleshooting / 常见问题
-
-1. `estimate_shipping` missing `shipping_quote_id`
-   - EN: Ensure address/shop/item are valid and quote not expired.
-   - 中文：检查地址、店铺、商品参数是否正确，以及报价是否过期。
-2. `Transaction Hash not found`
-   - EN: Often means tx was cancelled by wallet or never broadcasted.
-   - 中文：通常是钱包取消了交易，或交易并未真正广播上链。
-3. Escrow amount mismatch
-   - EN: Always derive from `create_order` server quote (`total_amount_usdt`).
-   - 中文：始终以 `create_order` 返回的服务端报价（`total_amount_usdt`）为准。
-
-## Publish to GitHub / 发布到 GitHub
+## Publish
 
 ```bash
-git init
 git add .
-git commit -m "docs: add bilingual MCP integration kit"
-git branch -M main
-git remote add origin https://github.com/uniteonline/taopochta-agent-mcp.git
-git push -u origin main
+git commit -m "docs: improve README and examples"
+git push
 ```
 
+---
+
+## Описание на русском
+
+`taopochta-agent-mcp` — это готовый набор для интеграции MCP, чтобы агент мог пройти полный сценарий:
+поиск товара, расчет доставки, создание заказа, создание/пополнение escrow, подтверждение получения и синхронизация on-chain proof.
+
+### Важно
+
+**Сейчас поддерживается доставка только в Россию.**
+
+### Быстрый старт (15 минут)
+
+1. Запустите API с эндпоинтами `POST /api/mcp` и `POST /api/mcp/rpc`.
+2. Установите переменные окружения (`MCP_BASE_URL`, `MCP_ENDPOINT`, `AUTH_TOKEN_SECRET`, `MCP_BUYER_WALLET`).
+3. Проверьте MCP:
+   - `bash examples/curl/01_initialize.sh`
+   - `bash examples/curl/02_tools_list.sh`
+4. Запустите полный сценарий:
+   - `node scripts/test-mcp-flow.js --keyword watercup`
+   - или `npx tsx examples/node/full_flow.ts`
+   - или `python examples/python/full_flow.py`
+
+### Рекомендуемый порядок инструментов
+
+`search_products` -> `estimate_shipping` -> `create_order` -> `create_escrow` -> `fund_escrow` -> `confirm_receipt` -> `submit_tx` -> `get_order_proof`
+
+Если у товара есть варианты, обязательно передавайте `sku_id` в `estimate_shipping` и `create_order`.
+Сумма оплаты должна браться только из серверной котировки (`create_order`), а не рассчитываться на клиенте.

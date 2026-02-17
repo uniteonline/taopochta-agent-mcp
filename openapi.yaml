@@ -208,5 +208,5 @@ components:
           arguments:
             order_no: "394f22d4a49d245e"
             token_symbol: "USDT"
-            buyer_wallet: "0x6818384322B0B49adD9568Fc7Fa7A1eb2bD566F2"
+            buyer_wallet: "0xYourBuyerWalletAddress"
 

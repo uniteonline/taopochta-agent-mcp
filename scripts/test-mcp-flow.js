@@ -3,7 +3,7 @@
 const crypto = require('crypto');
 const readline = require('readline');
 
-const DEFAULT_BUYER_WALLET = '0x6818384322B0B49adD9568Fc7Fa7A1eb2bD566F2';
+const DEFAULT_BUYER_WALLET = '';
 
 function parseArgs(argv) {
   const result = {};
@@ -547,7 +547,7 @@ Core flow covered:
   5) MCP change order status (confirm_receipt, optional submit_tx confirm)
 
 Options:
-  --baseUrl              API base url (default: http://127.0.0.1:3000)
+  --baseUrl              API base url (default: https://taopochta.ru)
   --endpoint             MCP endpoint path (default: /api/mcp)
   --interactive          Prompt for tx_hash when missing (default: true)
   --token                Bearer token. If omitted, script auto-generates dev token.
@@ -579,8 +579,7 @@ Options:
   --skuId                Optional override sku_id
   --itemResource         Item resource for detail fallback (default: taobao)
   --detailLanguage       Language for detail fallback (default: ru)
-  --buyerWallet          buyer_wallet for create_escrow
-                         default: 0x6818384322B0B49adD9568Fc7Fa7A1eb2bD566F2
+  --buyerWallet          buyer_wallet for create_escrow (required for bsc flow)
   --sellerWallet         Optional seller_wallet for create_escrow
   --createTxHash         Optional tx hash; if provided, will call submit_tx(action=create)
   --fundTxHash           Optional tx hash; if provided, will call submit_tx(action=fund)
@@ -598,7 +597,7 @@ Examples:
     return;
   }
 
-  const baseUrl = trimSlash(args.baseUrl || process.env.MCP_BASE_URL || 'http://127.0.0.1:3000');
+  const baseUrl = trimSlash(args.baseUrl || process.env.MCP_BASE_URL || 'https://taopochta.ru');
   const endpointPath = firstString(args.endpoint, process.env.MCP_ENDPOINT, '/api/mcp');
   const endpoint = endpointPath.startsWith('/')
     ? `${baseUrl}${endpointPath}`

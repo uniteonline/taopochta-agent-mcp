@@ -27,7 +27,7 @@ import urllib.request
 from typing import Any, Dict, List, Optional
 
 
-DEFAULT_BUYER_WALLET = "0x6818384322B0B49adD9568Fc7Fa7A1eb2bD566F2"
+DEFAULT_BUYER_WALLET = ""
 
 
 def trim_slash(value: str) -> str:
@@ -138,7 +138,28 @@ def looks_like_product(item: Any) -> bool:
     if not isinstance(item, dict):
         return False
     item_id = first_string(item.get("item_id"), item.get("itemId"), item.get("id"))
-    return bool(item_id)
+    if not item_id:
+        return False
+    hints = [
+        item.get("title"),
+        item.get("shop_name"),
+        item.get("price"),
+        item.get("main_image_url"),
+        item.get("coupon_price"),
+        item.get("inventory"),
+    ]
+    has_product_hint = any(v is not None for v in hints)
+    return has_product_hint or bool(first_string(item.get("shop_id"), item.get("shopId"), item.get("seller_id"), item.get("sellerId")))
+
+
+def get_sku_id(product: Dict[str, Any]) -> str:
+    return first_string(
+        product.get("sku_id"),
+        product.get("skuId"),
+        product.get("default_sku_id"),
+        product.get("defaultSkuId"),
+        product.get("sku"),
+    )
 
 
 def pick_cheapest_product(payload: Any) -> Optional[Dict[str, Any]]:
@@ -268,7 +289,7 @@ def resolve_shop_id_by_detail(base_url: str, token: str, item_id: str, item_reso
 
 
 def main() -> None:
-    base_url = trim_slash(os.getenv("MCP_BASE_URL", "http://127.0.0.1:3000"))
+    base_url = trim_slash(os.getenv("MCP_BASE_URL", "https://taopochta.ru"))
     mcp_endpoint = os.getenv("MCP_ENDPOINT", "/api/mcp")
     endpoint = f"{base_url}/{mcp_endpoint.lstrip('/')}"
 
@@ -288,6 +309,9 @@ def main() -> None:
     create_tx_hash = first_string(os.getenv("CREATE_TX_HASH"))
     fund_tx_hash = first_string(os.getenv("FUND_TX_HASH"))
     confirm_tx_hash = first_string(os.getenv("CONFIRM_TX_HASH"))
+
+    if pay_method.lower() == "bsc" and not buyer_wallet:
+        raise RuntimeError("MCP_BUYER_WALLET is required for bsc flow")
 
     mcp = McpClient(endpoint, token)
 
@@ -358,6 +382,7 @@ def main() -> None:
 
     item_id = first_string(selected.get("item_id"), selected.get("itemId"))
     shop_id = first_string(selected.get("shop_id"), selected.get("shopId"), os.getenv("MCP_SHOP_ID"))
+    sku_id = first_string(os.getenv("MCP_SKU_ID"), get_sku_id(selected))
     if not item_id:
         raise RuntimeError("No item_id in selected product")
     if not shop_id:
@@ -369,6 +394,7 @@ def main() -> None:
             {
                 "item_id": item_id,
                 "shop_id": shop_id,
+                "sku_id": sku_id or None,
                 "coupon_price": selected.get("coupon_price"),
                 "price": selected.get("price"),
             },
@@ -384,6 +410,7 @@ def main() -> None:
             "shipping_address_id": shipping_address_id,
             "shop_id": shop_id,
             "item_id": item_id,
+            "sku_id": sku_id or None,
             "quantity": quantity,
         },
     )
@@ -407,6 +434,7 @@ def main() -> None:
             "shipping_address_id": shipping_address_id,
             "shop_id": shop_id,
             "item_id": item_id,
+            "sku_id": sku_id or None,
             "quantity": quantity,
             "shipping_quote_id": shipping_quote_id,
             "pay_method": pay_method,
@@ -464,6 +492,7 @@ def main() -> None:
                 "shipping_quote_id": shipping_quote_id,
                 "item_id": item_id,
                 "shop_id": shop_id,
+                "sku_id": sku_id or None,
                 "create_submitted": bool(create_tx_hash),
                 "fund_submitted": bool(fund_tx_hash),
                 "confirm_submitted": bool(confirm_tx_hash),
