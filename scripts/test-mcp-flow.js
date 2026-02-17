@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 /* eslint-disable no-console */
-const crypto = require('crypto');
 const readline = require('readline');
 
 const DEFAULT_BUYER_WALLET = '';
@@ -27,24 +26,6 @@ function isTruthy(raw) {
   return ['1', 'true', 'yes', 'on'].includes(value);
 }
 
-function base64UrlEncode(input) {
-  return Buffer.from(input).toString('base64url');
-}
-
-function createHs256Token(params) {
-  const nowSec = Math.floor(Date.now() / 1000);
-  const header = { alg: 'HS256', typ: 'JWT' };
-  const payload = {
-    sub: Number(params.userId),
-    exp: nowSec + Number(params.ttlSec || 3600),
-    iat: nowSec,
-  };
-  const h = base64UrlEncode(JSON.stringify(header));
-  const p = base64UrlEncode(JSON.stringify(payload));
-  const s = crypto.createHmac('sha256', params.secret).update(`${h}.${p}`).digest('base64url');
-  return `${h}.${p}.${s}`;
-}
-
 function trimSlash(url) {
   return String(url || '').replace(/\/+$/, '');
 }
@@ -61,6 +42,28 @@ function firstString(...values) {
     if (s) return s;
   }
   return '';
+}
+
+function deriveApiBaseUrl(rawBaseUrl) {
+  const base = trimSlash(rawBaseUrl);
+  if (base.endsWith('/api/mcp')) return trimSlash(base.slice(0, -'/api/mcp'.length));
+  if (base.endsWith('/mcp')) return trimSlash(base.slice(0, -'/mcp'.length));
+  return base;
+}
+
+function resolveMcpEndpoint(rawBaseUrl, explicitEndpoint) {
+  const base = trimSlash(rawBaseUrl);
+  const endpoint = firstString(explicitEndpoint);
+  if (endpoint) {
+    if (/^https?:\/\//i.test(endpoint)) return trimSlash(endpoint);
+    if (base.endsWith('/api/mcp') || base.endsWith('/mcp')) {
+      const apiBase = deriveApiBaseUrl(base);
+      return endpoint.startsWith('/') ? `${apiBase}${endpoint}` : `${apiBase}/${endpoint}`;
+    }
+    return endpoint.startsWith('/') ? `${base}${endpoint}` : `${base}/${endpoint}`;
+  }
+  if (base.endsWith('/api/mcp') || base.endsWith('/mcp')) return base;
+  return `${base}/api/mcp`;
 }
 
 function generateTestUserId() {
@@ -149,6 +152,24 @@ async function postJson(url, body, headers, timeoutMs) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function issueMcpToken(params) {
+  const body = {
+    grant_type: 'client_credentials',
+    client_id: params.clientId,
+    client_secret: params.clientSecret,
+    sub: params.userId,
+  };
+  if (params.ttlSec > 0) body.ttl_sec = params.ttlSec;
+  if (params.refreshTtlSec > 0) body.refresh_ttl_sec = params.refreshTtlSec;
+
+  const tokenResp = await postJson(params.tokenUrl, body, {}, params.timeoutMs);
+  const accessToken = firstString(tokenResp?.access_token);
+  if (!accessToken) {
+    throw new Error(`Token endpoint did not return access_token: ${JSON.stringify(tokenResp)}`);
+  }
+  return tokenResp;
 }
 
 async function getJson(url, headers, timeoutMs) {
@@ -547,11 +568,15 @@ Core flow covered:
   5) MCP change order status (confirm_receipt, optional submit_tx confirm)
 
 Options:
-  --baseUrl              API base url (default: https://taopochta.ru)
-  --endpoint             MCP endpoint path (default: /api/mcp)
+  --baseUrl              API base url (default: https://taopochta.ru/api/mcp)
+  --endpoint             MCP endpoint path/url (default: auto resolve /api/mcp)
+  --tokenUrl             Token endpoint url (default: <apiBaseUrl>/api/mcp/token)
   --interactive          Prompt for tx_hash when missing (default: true)
-  --token                Bearer token. If omitted, script auto-generates dev token.
-  --authSecret           Secret for auto token generation (default: AUTH_TOKEN_SECRET or dev-secret)
+  --token                Bearer token. If omitted, script requests one from /api/mcp/token.
+  --clientId             OAuth client id for token endpoint (or MCP_CLIENT_ID)
+  --clientSecret         OAuth client secret for token endpoint (or MCP_CLIENT_SECRET)
+  --tokenTtlSec          Optional access token ttl_sec for /api/mcp/token
+  --refreshTtlSec        Optional refresh_ttl_sec for /api/mcp/token
   --newUser              Auto-generate new userId when --token/--userId are absent (default: true)
   --userId               User ID for token/bootstrap. If omitted and --newUser=true, generated per run.
   --userName             Display name for MCP create_user bootstrap
@@ -597,14 +622,27 @@ Examples:
     return;
   }
 
-  const baseUrl = trimSlash(args.baseUrl || process.env.MCP_BASE_URL || 'https://taopochta.ru');
-  const endpointPath = firstString(args.endpoint, process.env.MCP_ENDPOINT, '/api/mcp');
-  const endpoint = endpointPath.startsWith('/')
-    ? `${baseUrl}${endpointPath}`
-    : `${baseUrl}/${endpointPath}`;
+  const baseUrlInput = trimSlash(args.baseUrl || process.env.MCP_BASE_URL || 'https://taopochta.ru/api/mcp');
+  const endpoint = resolveMcpEndpoint(
+    baseUrlInput,
+    firstString(args.endpoint, process.env.MCP_ENDPOINT),
+  );
+  const apiBaseUrl = deriveApiBaseUrl(baseUrlInput);
+  const tokenUrl = firstString(
+    args.tokenUrl,
+    process.env.MCP_TOKEN_URL,
+    `${apiBaseUrl}/api/mcp/token`,
+  );
   const interactive = isTruthy(firstString(args.interactive, process.env.MCP_INTERACTIVE, 'true'));
   const timeoutMs = toInt(args.timeoutMs || process.env.MCP_TIMEOUT_MS, 30000);
   const rawProvidedToken = firstString(args.token, process.env.MCP_TOKEN);
+  const clientId = firstString(args.clientId, process.env.MCP_CLIENT_ID);
+  const clientSecret = firstString(args.clientSecret, process.env.MCP_CLIENT_SECRET);
+  const tokenTtlSec = toInt(firstString(args.tokenTtlSec, process.env.MCP_ACCESS_TOKEN_TTL_SEC), 0);
+  const refreshTtlSec = toInt(
+    firstString(args.refreshTtlSec, process.env.MCP_REFRESH_TOKEN_TTL_SEC),
+    0,
+  );
   const newUser = isTruthy(firstString(args.newUser, process.env.MCP_NEW_USER, 'true'));
   const explicitUserId = toPositiveIntOrNaN(firstString(args.userId, process.env.MCP_USER_ID));
   const shippingAddressIdArg = toPositiveIntOrNaN(
@@ -655,7 +693,6 @@ Examples:
     DEFAULT_BUYER_WALLET,
   );
   const sellerWallet = firstString(args.sellerWallet, process.env.MCP_SELLER_WALLET);
-  const authSecret = firstString(args.authSecret, process.env.AUTH_TOKEN_SECRET, 'dev-secret');
 
   if (isContractPayment && !buyerWallet) {
     throw new Error('buyerWallet is required for BSC flow');
@@ -663,12 +700,22 @@ Examples:
 
   let token = rawProvidedToken;
   if (!token) {
-    token = createHs256Token({
+    if (!clientId || !clientSecret) {
+      throw new Error(
+        'MCP_TOKEN is not provided. Please set MCP_CLIENT_ID and MCP_CLIENT_SECRET (or pass --clientId/--clientSecret).',
+      );
+    }
+    const tokenResp = await issueMcpToken({
+      tokenUrl,
+      clientId,
+      clientSecret,
       userId,
-      secret: authSecret,
-      ttlSec: 3600,
+      ttlSec: tokenTtlSec,
+      refreshTtlSec,
+      timeoutMs,
     });
-    console.log('[auth] token not provided, generated a local HS256 token.');
+    token = tokenResp.access_token;
+    console.log('[auth] token not provided, obtained access token from /api/mcp/token.');
   }
 
   const headers = { authorization: `Bearer ${token}` };
@@ -680,7 +727,9 @@ Examples:
 
   printStep('0. Basic Config');
   printJson('mode', mcp.mode);
+  printJson('apiBaseUrl', apiBaseUrl);
   printJson('endpoint', mcp.endpoint);
+  printJson('tokenUrl', tokenUrl);
   printJson('newUser', newUser);
   printJson('userId', userId);
   printJson('userIdAutoGenerated', userIdAutoGenerated);
@@ -695,6 +744,8 @@ Examples:
   printJson('itemResource', itemResource);
   printJson('detailLanguage', detailLanguage);
   printJson('interactive', interactive);
+  printJson('tokenSource', rawProvidedToken ? 'provided' : 'issued_by_server');
+  printJson('clientId', clientId || null);
   printJson('buyerWallet', buyerWallet || null);
   printJson('initialize', mcp.initialize);
   printJson(
@@ -856,7 +907,7 @@ Examples:
     console.log('[select] shop_id missing in search result, trying /api/products/detail fallback...');
     try {
       const detailFallback = await resolveShopIdByDetail({
-        baseUrl,
+        baseUrl: apiBaseUrl,
         itemId: orderFields.itemId,
         itemResource,
         language: detailLanguage,

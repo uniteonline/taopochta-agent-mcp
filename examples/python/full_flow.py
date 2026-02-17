@@ -15,9 +15,6 @@ Optional tx submission:
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
 import json
 import os
 import sys
@@ -34,25 +31,32 @@ def trim_slash(value: str) -> str:
     return str(value or "").rstrip("/")
 
 
-def now_sec() -> int:
-    return int(time.time())
+def derive_api_base_url(raw_base_url: str) -> str:
+    base = trim_slash(raw_base_url)
+    if base.endswith("/api/mcp"):
+        return trim_slash(base[: -len("/api/mcp")])
+    if base.endswith("/mcp"):
+        return trim_slash(base[: -len("/mcp")])
+    return base
 
 
-def b64url(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
-
-
-def make_token(user_id: int, secret: str) -> str:
-    header = b64url(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode("utf-8"))
-    payload = b64url(
-        json.dumps(
-            {"sub": int(user_id), "iat": now_sec(), "exp": now_sec() + 3600},
-            separators=(",", ":"),
-        ).encode("utf-8")
-    )
-    message = f"{header}.{payload}".encode("ascii")
-    sig = hmac.new(secret.encode("utf-8"), message, hashlib.sha256).digest()
-    return f"{header}.{payload}.{b64url(sig)}"
+def resolve_mcp_endpoint(raw_base_url: str, explicit_endpoint: str) -> str:
+    base = trim_slash(raw_base_url)
+    endpoint = first_string(explicit_endpoint)
+    if endpoint:
+        if endpoint.startswith("http://") or endpoint.startswith("https://"):
+            return trim_slash(endpoint)
+        if base.endswith("/api/mcp") or base.endswith("/mcp"):
+            api_base = derive_api_base_url(base)
+            if endpoint.startswith("/"):
+                return f"{api_base}{endpoint}"
+            return f"{api_base}/{endpoint}"
+        if endpoint.startswith("/"):
+            return f"{base}{endpoint}"
+        return f"{base}/{endpoint}"
+    if base.endswith("/api/mcp") or base.endswith("/mcp"):
+        return base
+    return f"{base}/api/mcp"
 
 
 def first_string(*values: Any) -> str:
@@ -232,6 +236,40 @@ def _http_json(url: str, method: str, body: Optional[Dict[str, Any]], token: str
         return json.loads(text) if text else {}
 
 
+def issue_mcp_token(
+    token_url: str,
+    client_id: str,
+    client_secret: str,
+    user_id: int,
+    access_ttl_sec: int,
+    refresh_ttl_sec: int,
+) -> Dict[str, Any]:
+    body: Dict[str, Any] = {
+        "grant_type": "client_credentials",
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "sub": int(user_id),
+    }
+    if access_ttl_sec > 0:
+        body["ttl_sec"] = int(access_ttl_sec)
+    if refresh_ttl_sec > 0:
+        body["refresh_ttl_sec"] = int(refresh_ttl_sec)
+
+    payload_bytes = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        token_url,
+        data=payload_bytes,
+        method="POST",
+        headers={"content-type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        text = resp.read().decode("utf-8")
+        data = json.loads(text) if text else {}
+    if not first_string(data.get("access_token")):
+        raise RuntimeError(f"Token endpoint returned no access_token: {data}")
+    return data
+
+
 class McpClient:
     def __init__(self, endpoint: str, token: str) -> None:
         self.endpoint = endpoint
@@ -289,14 +327,28 @@ def resolve_shop_id_by_detail(base_url: str, token: str, item_id: str, item_reso
 
 
 def main() -> None:
-    base_url = trim_slash(os.getenv("MCP_BASE_URL", "https://taopochta.ru"))
-    mcp_endpoint = os.getenv("MCP_ENDPOINT", "/api/mcp")
-    endpoint = f"{base_url}/{mcp_endpoint.lstrip('/')}"
+    base_url_input = trim_slash(os.getenv("MCP_BASE_URL", "https://taopochta.ru/api/mcp"))
+    endpoint = resolve_mcp_endpoint(base_url_input, os.getenv("MCP_ENDPOINT", ""))
+    api_base_url = derive_api_base_url(base_url_input)
+    token_url = first_string(os.getenv("MCP_TOKEN_URL"), f"{api_base_url}/api/mcp/token")
 
     user_id = to_int(os.getenv("MCP_USER_ID", str(int(time.time() * 1000))), int(time.time() * 1000))
-    token = os.getenv("MCP_TOKEN", "")
+    token = first_string(os.getenv("MCP_TOKEN"))
     if not token:
-        token = make_token(user_id, os.getenv("AUTH_TOKEN_SECRET", "dev-secret"))
+        client_id = first_string(os.getenv("MCP_CLIENT_ID"))
+        client_secret = first_string(os.getenv("MCP_CLIENT_SECRET"))
+        if not client_id or not client_secret:
+            raise RuntimeError("MCP_TOKEN is not set. Please set MCP_CLIENT_ID and MCP_CLIENT_SECRET.")
+        token_resp = issue_mcp_token(
+            token_url=token_url,
+            client_id=client_id,
+            client_secret=client_secret,
+            user_id=user_id,
+            access_ttl_sec=to_int(os.getenv("MCP_ACCESS_TOKEN_TTL_SEC", "0"), 0),
+            refresh_ttl_sec=to_int(os.getenv("MCP_REFRESH_TOKEN_TTL_SEC", "0"), 0),
+        )
+        token = token_resp["access_token"]
+        print("[auth] token issued by /api/mcp/token")
 
     keyword = os.getenv("MCP_KEYWORD", "watercup")
     pay_method = os.getenv("MCP_PAY_METHOD", "bsc")
@@ -386,7 +438,7 @@ def main() -> None:
     if not item_id:
         raise RuntimeError("No item_id in selected product")
     if not shop_id:
-        shop_id = resolve_shop_id_by_detail(base_url, token, item_id, item_resource, detail_language)
+        shop_id = resolve_shop_id_by_detail(api_base_url, token, item_id, item_resource, detail_language)
     if not shop_id:
         raise RuntimeError("Cannot resolve shop_id")
     print(

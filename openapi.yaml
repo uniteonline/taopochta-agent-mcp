@@ -9,10 +9,10 @@ info:
     Use `initialize`, `tools/list`, and `tools/call`.
 
 servers:
-  - url: http://127.0.0.1:3000
-    description: Local
   - url: https://taopochta.ru
     description: Production
+  - url: http://127.0.0.1:3000
+    description: Local
 
 paths:
   /api/mcp:
@@ -117,6 +117,81 @@ paths:
         '204':
           description: No content (notification)
 
+  /api/mcp/token:
+    post:
+      summary: Issue or refresh MCP bearer token
+      description: |
+        Issue short-lived access token with `grant_type=client_credentials`,
+        or refresh with `grant_type=refresh_token`.
+      operationId: mcpTokenIssue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/McpTokenRequest'
+            examples:
+              clientCredentials:
+                value:
+                  grant_type: client_credentials
+                  client_id: agent_demo
+                  client_secret: replace_me
+                  sub: 1771301696853
+                  ttl_sec: 900
+              refreshToken:
+                value:
+                  grant_type: refresh_token
+                  client_id: agent_demo
+                  client_secret: replace_me
+                  refresh_token: mrt_xxx
+      responses:
+        '200':
+          description: Token issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpTokenResponse'
+        '400':
+          description: Invalid request
+        '401':
+          description: Invalid client credentials or token
+
+  /api/mcp/token/revoke:
+    post:
+      summary: Revoke refresh token
+      description: |
+        Revoke refresh token by `refresh_token` (recommended) or by `token_jti`.
+      operationId: mcpTokenRevoke
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/McpTokenRevokeRequest'
+            examples:
+              revokeByRefreshToken:
+                value:
+                  client_id: agent_demo
+                  client_secret: replace_me
+                  refresh_token: mrt_xxx
+                  reason: risk-control logout
+              revokeByJti:
+                value:
+                  client_id: agent_demo
+                  client_secret: replace_me
+                  token_jti: 0123456789abcdef
+      responses:
+        '200':
+          description: Revoke result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpTokenRevokeResponse'
+        '400':
+          description: Invalid request
+        '401':
+          description: Invalid client credentials
+
 components:
   securitySchemes:
     bearerAuth:
@@ -196,6 +271,120 @@ components:
             data:
               nullable: true
 
+    McpTokenRequest:
+      type: object
+      required: [client_id, client_secret]
+      properties:
+        grant_type:
+          type: string
+          enum: [client_credentials, refresh_token]
+          default: client_credentials
+        client_id:
+          type: string
+        client_secret:
+          type: string
+        sub:
+          type: integer
+          minimum: 1
+          description: Required by client policy for client_credentials grant
+        user_id:
+          type: integer
+          minimum: 1
+          description: Alias of sub
+        refresh_token:
+          type: string
+          description: Required when grant_type=refresh_token
+        ttl_sec:
+          type: integer
+          minimum: 1
+        refresh_ttl_sec:
+          type: integer
+          minimum: 1
+
+    McpTokenResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        token_type:
+          type: string
+          example: Bearer
+        access_token:
+          type: string
+        expires_in:
+          type: integer
+        expires_at:
+          type: string
+          format: date-time
+        refresh_token:
+          type: string
+        refresh_expires_in:
+          type: integer
+        refresh_expires_at:
+          type: string
+          format: date-time
+        sub:
+          type: integer
+        client_id:
+          type: string
+        scope:
+          type: string
+
+    McpTokenRevokeRequest:
+      type: object
+      required: [client_id, client_secret]
+      properties:
+        client_id:
+          type: string
+        client_secret:
+          type: string
+        refresh_token:
+          type: string
+        token_jti:
+          type: string
+        sub:
+          type: integer
+          minimum: 1
+        user_id:
+          type: integer
+          minimum: 1
+        reason:
+          type: string
+          maxLength: 256
+
+    McpTokenRevokeResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        client_id:
+          type: string
+        revoked_count:
+          type: integer
+        revoked:
+          type: array
+          items:
+            type: object
+            properties:
+              token_jti:
+                type: string
+              sub:
+                type: integer
+              scope:
+                type: string
+              expires_at:
+                type: string
+                format: date-time
+                nullable: true
+              rotated_at:
+                type: string
+                format: date-time
+                nullable: true
+              used_at:
+                type: string
+                format: date-time
+                nullable: true
+
   examples:
     ToolsCallCreateEscrow:
       summary: tools/call -> create_escrow
@@ -209,4 +398,3 @@ components:
             order_no: "394f22d4a49d245e"
             token_symbol: "USDT"
             buyer_wallet: "0xYourBuyerWalletAddress"
-

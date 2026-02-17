@@ -76,7 +76,7 @@ if [[ -z "${item_id}" ]]; then
 fi
 
 if [[ -z "${shop_id}" ]]; then
-  detail_url="${MCP_BASE_URL}/api/products/detail?item_resource=${ITEM_RESOURCE}&item_id=${item_id}&language=${DETAIL_LANGUAGE}"
+  detail_url="${MCP_API_BASE_URL}/api/products/detail?item_resource=${ITEM_RESOURCE}&item_id=${item_id}&language=${DETAIL_LANGUAGE}"
   detail_resp="$(curl -sS "${detail_url}" -H "authorization: Bearer ${MCP_TOKEN}")"
   shop_id="$(echo "${detail_resp}" | jq -r '.shop_id // .shopId // .data.shop_id // .data.shopId // .data.data.shop_id // .data.data.shopId // empty')"
 fi
@@ -177,4 +177,3 @@ jq -n \
     sku_id: (if ($sku_id | length) > 0 then $sku_id else null end),
     note: "Tx request generated. Sign in wallet, then call submit_tx(order_no, action, tx_hash)."
   }'
-

@@ -7,88 +7,94 @@
 ![Chain](https://img.shields.io/badge/Chain-BNB%20Smart%20Chain-F3BA2F?style=flat-square)
 ![Shipping](https://img.shields.io/badge/Shipping-Russia%20Only-orange?style=flat-square)
 
-Production-ready MCP integration kit for AI agents to execute the full Taopochta workflow:
-product search -> shipping estimate -> order creation -> escrow create/fund/confirm -> on-chain proof sync.
+Production-ready MCP integration kit for AI agents to run the full Taopochta flow:
+
+`search_products -> estimate_shipping -> create_order -> create_escrow -> fund_escrow -> confirm_receipt -> submit_tx -> get_order_proof`
 
 ## Important
 
-**Shipping is currently supported for Russia only.**
+Shipping is currently supported for **Russia only**.
 
-## What You Get
+## What Is Included
 
-- MCP protocol docs: `openapi.yaml`
-- End-to-end test script: `scripts/test-mcp-flow.js`
+- MCP API spec: `openapi.yaml`
+- End-to-end JS test script: `scripts/test-mcp-flow.js`
 - Runnable examples:
   - `examples/curl/*.sh`
   - `examples/node/full_flow.ts`
   - `examples/python/full_flow.py`
 
+## Architecture
+
+```mermaid
+flowchart LR
+  A["Agent / Client"] --> B["MCP Endpoint (/api/mcp or /mcp)"]
+  B --> C["MCP Tool Router"]
+  C --> D["search_products"]
+  C --> E["estimate_shipping"]
+  C --> F["create_order"]
+  C --> G["create_escrow"]
+  C --> H["fund_escrow"]
+  C --> I["confirm_receipt"]
+  D --> J["Taopochta Product APIs"]
+  E --> K["Shipping Estimate API"]
+  F --> L["Order Service (server-side pricing)"]
+  G --> M["Escrow Contract (BSC)"]
+  H --> M
+  I --> M
+  M --> N["submit_tx + get_order_proof sync"]
+  N --> A
+```
+
 ## 15-Minute Quick Start
 
-### 1) Prerequisites
+### 1) Server prerequisites
 
-- API service exposes:
-  - `POST /api/mcp`
-  - `POST /api/mcp/rpc`
-- Node.js 18+
-- Python 3.9+
-- BSC wallet with BNB gas + USDT (for payment flow)
+Your API service should expose:
 
-### 2) Environment
+- `POST /api/mcp`
+- `POST /api/mcp/rpc` (optional alias)
+- `POST /api/mcp/token` (issue access token)
+- `POST /api/mcp/token/revoke` (revoke refresh token)
 
-Recommended for agents (single MCP URL):
+### 2) Environment (recommended)
+
+Use direct MCP endpoint URL as default:
 
 ```bash
 export MCP_BASE_URL="https://taopochta.ru/api/mcp"
-export AUTH_TOKEN_SECRET="dev-secret"
+export MCP_TOKEN_URL="https://taopochta.ru/api/mcp/token"
+export MCP_CLIENT_ID="your_agent_client_id"
+export MCP_CLIENT_SECRET="your_agent_client_secret"
 export MCP_USER_ID="$(date +%s)"
 export MCP_BUYER_WALLET="0xYourBuyerWalletAddress"
 ```
 
-For scripts in this repository (`MCP_BASE_URL + MCP_ENDPOINT` mode):
+If your deployment uses root host + endpoint path:
 
 ```bash
 export MCP_BASE_URL="https://taopochta.ru"
 export MCP_ENDPOINT="/api/mcp"
-export AUTH_TOKEN_SECRET="dev-secret"
-export MCP_USER_ID="$(date +%s)"
-export MCP_BUYER_WALLET="0xYourBuyerWalletAddress"
+```
+
+If you already have bearer token:
+
+```bash
+export MCP_TOKEN="eyJ..."
 ```
 
 PowerShell:
 
 ```powershell
 $env:MCP_BASE_URL="https://taopochta.ru/api/mcp"
-$env:AUTH_TOKEN_SECRET="dev-secret"
+$env:MCP_TOKEN_URL="https://taopochta.ru/api/mcp/token"
+$env:MCP_CLIENT_ID="your_agent_client_id"
+$env:MCP_CLIENT_SECRET="your_agent_client_secret"
 $env:MCP_USER_ID=[int][double]::Parse((Get-Date -UFormat %s))
 $env:MCP_BUYER_WALLET="0xYourBuyerWalletAddress"
-```
-
-PowerShell for this repository scripts:
-
-```powershell
-$env:MCP_BASE_URL="https://taopochta.ru"
-$env:MCP_ENDPOINT="/api/mcp"
-$env:AUTH_TOKEN_SECRET="dev-secret"
-$env:MCP_USER_ID=[int][double]::Parse((Get-Date -UFormat %s))
-$env:MCP_BUYER_WALLET="0xYourBuyerWalletAddress"
-```
-
-For local development only:
-
-```bash
-export MCP_BASE_URL="http://127.0.0.1:3000/api/mcp"
-```
-
-If you expose MCP through Nginx as `https://taopochta.ru/mcp`, set single-URL mode as:
-
-```bash
-export MCP_BASE_URL="https://taopochta.ru/mcp"
 ```
 
 ### 3) Probe MCP
-
-Use the "scripts in this repository" env mode above when running `examples/*` and `scripts/test-mcp-flow.js`.
 
 ```bash
 cd examples/curl
@@ -98,7 +104,7 @@ bash 02_tools_list.sh
 
 ### 4) Run full flow
 
-Interactive JS (recommended for manual wallet signing):
+Interactive JS (manual wallet signing):
 
 ```bash
 cd ../../
@@ -119,27 +125,23 @@ cd examples/python
 python full_flow.py
 ```
 
-## Architecture
+## Canonical Payment Flow
 
-```mermaid
-flowchart LR
-  A["Agent / Client"] --> B["MCP Endpoint /api/mcp"]
-  B --> C["Tool Router"]
-  C --> D["search_products"]
-  C --> E["estimate_shipping"]
-  C --> F["create_order"]
-  C --> G["create_escrow"]
-  C --> H["fund_escrow"]
-  C --> I["confirm_receipt"]
-  D --> J["Taopochta Product APIs"]
-  E --> K["/api/items/shipping/estimate"]
-  F --> L["Order Service"]
-  G --> M["Escrow Contract on BSC"]
-  H --> M
-  I --> M
-  M --> N["submit_tx + get_order_proof"]
-  N --> A
-```
+1. `search_products`
+2. `estimate_shipping` (must happen before order)
+3. `create_order` with `shipping_quote_id` (and `sku_id` when applicable)
+4. `create_escrow`
+5. Sign create tx in wallet
+6. `submit_tx(action=create, tx_hash=...)`
+7. `fund_escrow`
+8. Sign fund tx in wallet
+9. `submit_tx(action=fund, tx_hash=...)`
+10. `confirm_receipt`
+11. Sign confirm tx in wallet
+12. `submit_tx(action=confirm, tx_hash=...)`
+13. `get_order_proof`
+
+Security rule: payment amount must come from server-side quote (`create_order` / escrow payload), not client-side arithmetic.
 
 ## Available MCP Tools
 
@@ -161,38 +163,26 @@ flowchart LR
 16. `submit_tx`
 17. `get_order_proof`
 
-## Canonical Payment Flow
-
-1. `search_products`
-2. `estimate_shipping`
-3. `create_order` (must include `shipping_quote_id`, and `sku_id` when present)
-4. `create_escrow`
-5. Sign create tx in wallet
-6. `submit_tx(action=create, tx_hash=...)`
-7. `fund_escrow`
-8. Sign fund tx in wallet
-9. `submit_tx(action=fund, tx_hash=...)`
-10. `confirm_receipt`
-11. Sign confirm tx in wallet
-12. `submit_tx(action=confirm, tx_hash=...)`
-13. `get_order_proof`
-
-Security rule: payment amount must come from server-side order quote (`create_order`), not client-side math.
-
 ## Environment Variables
 
 | Name | Required | Example | Purpose |
 |---|---|---|---|
-| `MCP_BASE_URL` | Yes | `https://taopochta.ru/api/mcp` | MCP URL (recommended for agents) |
-| `MCP_ENDPOINT` | No | `/api/mcp` | Extra endpoint path used by this repo scripts |
-| `AUTH_TOKEN_SECRET` | Local yes | `dev-secret` | JWT signing secret |
-| `MCP_TOKEN` | Optional | `eyJ...` | If unset, examples generate token |
-| `MCP_USER_ID` | Optional | `1771301696853` | JWT `sub` |
-| `MCP_BUYER_WALLET` | BSC flow yes | `0x...` | Buyer wallet |
-| `MCP_SKU_ID` | Optional | `5913730265710` | Override SKU if needed |
+| `MCP_BASE_URL` | Yes | `https://taopochta.ru/api/mcp` | MCP endpoint URL (recommended) or host root |
+| `MCP_ENDPOINT` | No | `/api/mcp` | Needed only when `MCP_BASE_URL` is host root |
+| `MCP_TOKEN_URL` | No | `https://taopochta.ru/api/mcp/token` | Token issue endpoint |
+| `MCP_CLIENT_ID` | Yes* | `agent_demo` | OAuth client id |
+| `MCP_CLIENT_SECRET` | Yes* | `replace_me` | OAuth client secret |
+| `MCP_TOKEN` | Optional | `eyJ...` | Pre-issued bearer token (skip token issue call) |
+| `MCP_USER_ID` | Optional | `1771301696853` | `sub` claim used for token issuing |
+| `MCP_ACCESS_TOKEN_TTL_SEC` | Optional | `900` | Requested access-token TTL |
+| `MCP_REFRESH_TOKEN_TTL_SEC` | Optional | `2592000` | Requested refresh-token TTL |
+| `MCP_BUYER_WALLET` | BSC flow yes | `0x...` | Buyer wallet address |
+| `MCP_SKU_ID` | Optional | `5913730265710` | Force SKU for variant products |
 | `CREATE_TX_HASH` | Optional | `0x...` | Auto submit create tx |
 | `FUND_TX_HASH` | Optional | `0x...` | Auto submit fund tx |
 | `CONFIRM_TX_HASH` | Optional | `0x...` | Auto submit confirm tx |
+
+\* Required only when `MCP_TOKEN` is not provided.
 
 ## Repo Structure
 
@@ -217,36 +207,34 @@ taopochta-agent-mcp/
 
 ## Troubleshooting
 
-- `estimate_shipping` has no `shipping_quote_id`
-  - Check address/shop/item (and `sku_id` for variant products).
-- `Transaction Hash not found`
-  - Usually canceled in wallet or never broadcast.
-- Escrow amount mismatch
-  - Trust server quote from `create_order` only.
-
-## Publish
-
-```bash
-git add .
-git commit -m "docs: improve README and examples"
-git push
-```
+- `estimate_shipping` has no `shipping_quote_id`:
+  - Check `shipping_address_id`, `shop_id`, `item_id`, and `sku_id`.
+- `Transaction Hash not found`:
+  - Usually canceled in wallet or not broadcast.
+- Escrow amount mismatch:
+  - Trust server quote from `create_order` and escrow tx payload only.
 
 ---
 
-## Описание на русском
+## Русская версия
 
-`taopochta-agent-mcp` — это готовый набор для интеграции MCP, чтобы агент мог пройти полный сценарий:
-поиск товара, расчет доставки, создание заказа, создание/пополнение escrow, подтверждение получения и синхронизация on-chain proof.
+`taopochta-agent-mcp` — это готовый набор для интеграции MCP, чтобы агент мог пройти полный процесс:
+
+`поиск товара -> расчет доставки -> создание заказа -> создание/пополнение escrow -> подтверждение получения -> on-chain proof`
 
 ### Важно
 
-**Сейчас поддерживается доставка только в Россию.**
+Доставка сейчас поддерживается только по России.
 
 ### Быстрый старт (15 минут)
 
-1. Запустите API с эндпоинтами `POST /api/mcp` и `POST /api/mcp/rpc`.
-2. Установите переменные окружения (`MCP_BASE_URL`, `MCP_ENDPOINT`, `AUTH_TOKEN_SECRET`, `MCP_BUYER_WALLET`).
+1. Убедитесь, что API публикует `POST /api/mcp`, `POST /api/mcp/token` (и при необходимости `/api/mcp/rpc`, `/api/mcp/token/revoke`).
+2. Задайте переменные окружения:
+   - `MCP_BASE_URL=https://taopochta.ru/api/mcp`
+   - `MCP_TOKEN_URL=https://taopochta.ru/api/mcp/token`
+   - `MCP_CLIENT_ID=...`
+   - `MCP_CLIENT_SECRET=...`
+   - `MCP_BUYER_WALLET=0x...`
 3. Проверьте MCP:
    - `bash examples/curl/01_initialize.sh`
    - `bash examples/curl/02_tools_list.sh`
@@ -255,9 +243,9 @@ git push
    - или `npx tsx examples/node/full_flow.ts`
    - или `python examples/python/full_flow.py`
 
-### Рекомендуемый порядок инструментов
+### Рекомендуемая последовательность инструментов
 
-`search_products` -> `estimate_shipping` -> `create_order` -> `create_escrow` -> `fund_escrow` -> `confirm_receipt` -> `submit_tx` -> `get_order_proof`
+`search_products -> estimate_shipping -> create_order -> create_escrow -> fund_escrow -> confirm_receipt -> submit_tx -> get_order_proof`
 
-Если у товара есть варианты, обязательно передавайте `sku_id` в `estimate_shipping` и `create_order`.
-Сумма оплаты должна браться только из серверной котировки (`create_order`), а не рассчитываться на клиенте.
+Если товар вариативный, обязательно передавайте `sku_id` в `estimate_shipping` и `create_order`.
+Сумма оплаты должна браться только из серверной котировки (`create_order`), а не вычисляться на клиенте.

@@ -1,5 +1,4 @@
 /* eslint-disable no-console */
-import crypto from 'crypto';
 
 const DEFAULT_BUYER_WALLET = '';
 
@@ -11,27 +10,6 @@ type JsonRpcResult = {
 
 function trimSlash(input: string): string {
   return String(input || '').replace(/\/+$/, '');
-}
-
-function nowSec(): number {
-  return Math.floor(Date.now() / 1000);
-}
-
-function base64Url(input: string): string {
-  return Buffer.from(input).toString('base64url');
-}
-
-function makeToken(userId: number, secret: string): string {
-  const header = base64Url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-  const payload = base64Url(
-    JSON.stringify({
-      sub: userId,
-      iat: nowSec(),
-      exp: nowSec() + 3600,
-    }),
-  );
-  const sig = crypto.createHmac('sha256', secret).update(`${header}.${payload}`).digest('base64url');
-  return `${header}.${payload}.${sig}`;
 }
 
 function firstString(...values: unknown[]): string {
@@ -46,6 +24,61 @@ function toInt(value: unknown, fallback: number): number {
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
   return Math.floor(n);
+}
+
+function deriveApiBaseUrl(rawBaseUrl: string): string {
+  const base = trimSlash(rawBaseUrl);
+  if (base.endsWith('/api/mcp')) return trimSlash(base.slice(0, -'/api/mcp'.length));
+  if (base.endsWith('/mcp')) return trimSlash(base.slice(0, -'/mcp'.length));
+  return base;
+}
+
+function resolveMcpEndpoint(rawBaseUrl: string, explicitEndpoint: string): string {
+  const base = trimSlash(rawBaseUrl);
+  const endpoint = firstString(explicitEndpoint);
+  if (endpoint) {
+    if (/^https?:\/\//i.test(endpoint)) return trimSlash(endpoint);
+    if (base.endsWith('/api/mcp') || base.endsWith('/mcp')) {
+      const apiBase = deriveApiBaseUrl(base);
+      return endpoint.startsWith('/') ? `${apiBase}${endpoint}` : `${apiBase}/${endpoint}`;
+    }
+    return endpoint.startsWith('/') ? `${base}${endpoint}` : `${base}/${endpoint}`;
+  }
+  if (base.endsWith('/api/mcp') || base.endsWith('/mcp')) return base;
+  return `${base}/api/mcp`;
+}
+
+async function issueMcpToken(params: {
+  tokenUrl: string;
+  clientId: string;
+  clientSecret: string;
+  userId: number;
+  accessTtlSec: number;
+  refreshTtlSec: number;
+}): Promise<any> {
+  const body: Record<string, any> = {
+    grant_type: 'client_credentials',
+    client_id: params.clientId,
+    client_secret: params.clientSecret,
+    sub: params.userId,
+  };
+  if (params.accessTtlSec > 0) body.ttl_sec = params.accessTtlSec;
+  if (params.refreshTtlSec > 0) body.refresh_ttl_sec = params.refreshTtlSec;
+
+  const resp = await fetch(params.tokenUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const text = await resp.text();
+  const json = text ? JSON.parse(text) : {};
+  if (!resp.ok) {
+    throw new Error(`Failed to issue token (${resp.status}): ${text}`);
+  }
+  if (!firstString(json?.access_token)) {
+    throw new Error(`Token endpoint returned no access_token: ${text}`);
+  }
+  return json;
 }
 
 function parseToolResult(raw: JsonRpcResult): any {
@@ -242,12 +275,31 @@ async function resolveShopIdByDetail(
 }
 
 async function main(): Promise<void> {
-  const baseUrl = trimSlash(process.env.MCP_BASE_URL || 'https://taopochta.ru');
-  const endpoint = `${baseUrl}${(process.env.MCP_ENDPOINT || '/api/mcp').startsWith('/') ? '' : '/'}${
-    process.env.MCP_ENDPOINT || '/api/mcp'
-  }`;
+  const baseUrlInput = trimSlash(process.env.MCP_BASE_URL || 'https://taopochta.ru/api/mcp');
+  const endpoint = resolveMcpEndpoint(baseUrlInput, firstString(process.env.MCP_ENDPOINT));
+  const apiBaseUrl = deriveApiBaseUrl(baseUrlInput);
+  const tokenUrl = firstString(process.env.MCP_TOKEN_URL, `${apiBaseUrl}/api/mcp/token`);
   const userId = toInt(process.env.MCP_USER_ID || Date.now(), Date.now());
-  const token = process.env.MCP_TOKEN || makeToken(userId, process.env.AUTH_TOKEN_SECRET || 'dev-secret');
+  const clientId = firstString(process.env.MCP_CLIENT_ID);
+  const clientSecret = firstString(process.env.MCP_CLIENT_SECRET);
+  const accessTokenTtlSec = toInt(process.env.MCP_ACCESS_TOKEN_TTL_SEC, 0);
+  const refreshTokenTtlSec = toInt(process.env.MCP_REFRESH_TOKEN_TTL_SEC, 0);
+  let token = firstString(process.env.MCP_TOKEN);
+  if (!token) {
+    if (!clientId || !clientSecret) {
+      throw new Error('MCP_TOKEN is not set. Please set MCP_CLIENT_ID and MCP_CLIENT_SECRET.');
+    }
+    const tokenResp = await issueMcpToken({
+      tokenUrl,
+      clientId,
+      clientSecret,
+      userId,
+      accessTtlSec: accessTokenTtlSec,
+      refreshTtlSec: refreshTokenTtlSec,
+    });
+    token = tokenResp.access_token;
+    console.log('[auth] token issued by /api/mcp/token');
+  }
   const keyword = process.env.MCP_KEYWORD || 'watercup';
   const payMethod = process.env.MCP_PAY_METHOD || 'bsc';
   const tokenSymbol = (process.env.MCP_TOKEN_SYMBOL || 'USDT').toUpperCase();
@@ -337,7 +389,7 @@ async function main(): Promise<void> {
   const skuId = firstString(process.env.MCP_SKU_ID, getSkuId(selected));
   if (!itemId) throw new Error('No item_id in selected product');
   if (!shopId) {
-    shopId = await resolveShopIdByDetail(baseUrl, token, itemId, itemResource, detailLanguage);
+    shopId = await resolveShopIdByDetail(apiBaseUrl, token, itemId, itemResource, detailLanguage);
   }
   if (!shopId) throw new Error('Cannot resolve shop_id');
   console.log('selected:', {
@@ -449,4 +501,3 @@ main().catch((err) => {
   console.error('[ERROR]', err?.message || err);
   process.exit(1);
 });
-
