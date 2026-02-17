@@ -295,6 +295,18 @@ def exchange_bootstrap_token(
     return data
 
 
+def ask_bootstrap_token() -> str:
+    if not sys.stdin.isatty():
+        return ""
+    while True:
+        answer = input("[auth] Paste bootstrap token from email (mbt_...), or type 'skip': ").strip()
+        if not answer or answer.lower() == "skip":
+            return ""
+        if answer.startswith("mbt_"):
+            return answer
+        print("[auth] Invalid bootstrap token format, please retry.")
+
+
 class McpClient:
     def __init__(self, endpoint: str, token: str) -> None:
         self.endpoint = endpoint
@@ -385,13 +397,23 @@ def main() -> None:
             token = exchange_resp["access_token"]
             print("[auth] token issued by bootstrap exchange endpoint")
         elif bootstrap_email:
-            request_bootstrap_by_email(
+            request_resp = request_bootstrap_by_email(
                 request_url=bootstrap_request_url,
                 email=bootstrap_email,
             )
-            raise RuntimeError(
-                "Bootstrap token requested by email. Set MCP_BOOTSTRAP_TOKEN from mailbox and re-run."
+            print("[auth] bootstrap request response:", json.dumps(request_resp, ensure_ascii=False, indent=2))
+            bootstrap_token = ask_bootstrap_token()
+            if not bootstrap_token:
+                raise RuntimeError(
+                    "Bootstrap token required. Set MCP_BOOTSTRAP_TOKEN or run in TTY and paste token from email."
+                )
+            exchange_resp = exchange_bootstrap_token(
+                exchange_url=bootstrap_exchange_url,
+                bootstrap_token=bootstrap_token,
+                access_ttl_sec=access_ttl,
             )
+            token = exchange_resp["access_token"]
+            print("[auth] bootstrap token exchanged in current run")
         else:
             raise RuntimeError(
                 "MCP_TOKEN is not set. Provide MCP_BOOTSTRAP_EMAIL + MCP_BOOTSTRAP_TOKEN."

@@ -39,6 +39,36 @@ function decodeJwtSubUnsafe(token: string): number {
   }
 }
 
+function canPrompt(): boolean {
+  return Boolean(process.stdin.isTTY && process.stdout.isTTY);
+}
+
+async function promptText(question: string): Promise<string> {
+  const readline = await import('node:readline');
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(String(answer || '').trim());
+    });
+  });
+}
+
+async function askBootstrapToken(): Promise<string> {
+  if (!canPrompt()) return '';
+  while (true) {
+    const answer = await promptText(
+      '[auth] Paste bootstrap token from email (mbt_...), or type "skip": ',
+    );
+    if (!answer || answer.toLowerCase() === 'skip') return '';
+    if (answer.startsWith('mbt_')) return answer;
+    console.log('[auth] Invalid bootstrap token format, please retry.');
+  }
+}
+
 function deriveApiBaseUrl(rawBaseUrl: string): string {
   const base = trimSlash(rawBaseUrl);
   if (base.endsWith('/api/mcp')) return trimSlash(base.slice(0, -'/api/mcp'.length));
@@ -332,13 +362,24 @@ async function main(): Promise<void> {
       token = firstString(exchangeResp?.access_token);
       console.log('[auth] token issued by bootstrap exchange endpoint');
     } else if (bootstrapEmail) {
-      await requestBootstrapByEmail({
+      const requestResp = await requestBootstrapByEmail({
         requestUrl: bootstrapRequestUrl,
         email: bootstrapEmail,
       });
-      throw new Error(
-        'Bootstrap token was requested by email. Set MCP_BOOTSTRAP_TOKEN from email and re-run.',
-      );
+      console.log('[auth] bootstrap request response:', JSON.stringify(requestResp, null, 2));
+      bootstrapToken = await askBootstrapToken();
+      if (!bootstrapToken) {
+        throw new Error(
+          'Bootstrap token required. Set MCP_BOOTSTRAP_TOKEN or run in TTY and paste token from email.',
+        );
+      }
+      const exchangeResp = await exchangeBootstrapToken({
+        exchangeUrl: bootstrapExchangeUrl,
+        bootstrapToken,
+        accessTtlSec: accessTokenTtlSec,
+      });
+      token = firstString(exchangeResp?.access_token);
+      console.log('[auth] bootstrap token exchanged in current run.');
     } else {
       throw new Error(
         'MCP_TOKEN is not set. Provide MCP_BOOTSTRAP_EMAIL + MCP_BOOTSTRAP_TOKEN.',

@@ -15,7 +15,7 @@ Shipping is currently supported for **Russia only**.
 
 ## What is inside
 
-- MCP API spec: `openapi.yaml`
+- Full MCP transport + tool contracts: `openapi.yaml`
 - End-to-end test script: `scripts/test-mcp-flow.js`
 - Runnable examples:
   - `examples/curl/*.sh`
@@ -35,23 +35,23 @@ flowchart LR
   F --> H["estimate_shipping"]
   F --> I["create_order"]
   F --> J["create_escrow / fund_escrow / confirm_receipt"]
-  J --> K["BSC on-chain tx + submit_tx"]
+  J --> K["BSC tx + submit_tx"]
   K --> L["get_order_proof"]
 ```
 
 ## 15-minute quick start
 
-### 1) Server endpoints
-
-Required:
+### 1) Required endpoints
 
 - `POST /api/mcp`
 - `POST /api/mcp/bootstrap/email/request`
 - `POST /api/mcp/bootstrap/email/exchange`
 
+`/api/mcp/token` and `client_id/client_secret` mode are intentionally removed from this repo.
+
 ### 2) Environment
 
-Recommended (email bootstrap):
+Linux/macOS:
 
 ```bash
 export MCP_BASE_URL="https://taopochta.ru/api/mcp"
@@ -71,7 +71,7 @@ $env:MCP_BOOTSTRAP_EMAIL="agent@example.com"
 $env:MCP_BUYER_WALLET="0xYourBuyerWalletAddress"
 ```
 
-### 3) Probe MCP
+### 3) Probe MCP transport
 
 ```bash
 cd examples/curl
@@ -81,7 +81,7 @@ bash 02_tools_list.sh
 
 ### 4) Run full flow
 
-Interactive JS (requests bootstrap token email, then asks you to paste `mbt_...`):
+Interactive JS test script:
 
 ```bash
 cd ../../
@@ -102,16 +102,20 @@ cd examples/python
 python full_flow.py
 ```
 
+Notes:
+- If `MCP_BOOTSTRAP_TOKEN` is not set and the terminal is interactive, scripts request email token and prompt you to paste `mbt_...` in the same run.
+- In non-interactive CI, set `MCP_BOOTSTRAP_TOKEN` explicitly.
+
 ## Authentication model
 
-### Default (recommended): email bootstrap
+Default and only supported mode in this repository:
 
 1. Agent calls `POST /api/mcp/bootstrap/email/request` with `email`.
 2. Server sends a **2-hour bootstrap token** to that mailbox.
 3. Agent calls `POST /api/mcp/bootstrap/email/exchange` with `bootstrap_token`.
-4. Agent receives MCP access token and uses it in `Authorization: Bearer ...`.
+4. Agent receives MCP access token and uses `Authorization: Bearer ...` on `/api/mcp`.
 
-Security behavior:
+Security behavior (server side):
 
 - API does not reveal whether email exists.
 - Bootstrap token is single-use.
@@ -124,13 +128,13 @@ Security behavior:
 2. `estimate_shipping` (required before order)
 3. `create_order` with `shipping_quote_id` (and `sku_id` when needed)
 4. `create_escrow`
-5. Sign create tx
+5. Sign create tx in wallet
 6. `submit_tx(action=create, tx_hash=...)`
 7. `fund_escrow`
-8. Sign fund tx
+8. Sign fund tx in wallet
 9. `submit_tx(action=fund, tx_hash=...)`
 10. `confirm_receipt`
-11. Sign confirm tx
+11. Sign confirm tx in wallet
 12. `submit_tx(action=confirm, tx_hash=...)`
 13. `get_order_proof`
 
@@ -209,15 +213,15 @@ taopochta-agent-mcp/
 
 ## Русская версия
 
-`taopochta-agent-mcp` — это набор для интеграции MCP, чтобы агент прошел полный процесс:
+`taopochta-agent-mcp` — это production-набор для интеграции MCP, чтобы агент прошел полный e-commerce сценарий:
 поиск товара -> расчет доставки -> создание заказа -> escrow -> оплата -> подтверждение получения -> on-chain proof.
 
 Важно: доставка сейчас поддерживается **только по России**.
 
 Рекомендуемый вход:
 
-1. `POST /api/mcp/bootstrap/email/request` с email.
-2. Получить bootstrap token (`mbt_...`) по почте.
+1. `POST /api/mcp/bootstrap/email/request` с `email`.
+2. Получить bootstrap token (`mbt_...`) на почту (действует 2 часа).
 3. `POST /api/mcp/bootstrap/email/exchange`.
 4. Использовать `access_token` для `POST /api/mcp`.
 
@@ -234,3 +238,5 @@ taopochta-agent-mcp/
 - `node scripts/test-mcp-flow.js --keyword watercup --bootstrapEmail agent@example.com`
 - или `npx tsx examples/node/full_flow.ts`
 - или `python examples/python/full_flow.py`
+
+Если `MCP_BOOTSTRAP_TOKEN` не задан и терминал интерактивный, скрипты попросят вставить `mbt_...` в этом же запуске.

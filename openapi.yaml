@@ -1,16 +1,20 @@
 openapi: 3.0.3
 info:
   title: Taopochta MCP JSON-RPC API
-  version: 0.0.1
+  version: 0.0.2
   description: |
     OpenAPI wrapper for Taopochta MCP endpoint.
 
-    MCP is transported over JSON-RPC 2.0 via HTTP POST.
-    Recommended auth flow for agents:
+    MCP transport is JSON-RPC 2.0 over HTTP POST.
+    Recommended and only auth flow documented in this repository:
 
     1) POST /api/mcp/bootstrap/email/request
     2) POST /api/mcp/bootstrap/email/exchange
     3) Use Authorization: Bearer <access_token> on /api/mcp
+
+    This spec includes:
+    - transport-level JSON-RPC request/response schemas
+    - complete tools/call contract for all MCP tools currently exposed by Taopochta
 
 servers:
   - url: https://taopochta.ru
@@ -22,9 +26,6 @@ paths:
   /api/mcp:
     post:
       summary: MCP JSON-RPC endpoint
-      description: |
-        Accepts a JSON-RPC request object or batch array.
-        Typical methods: initialize, notifications/initialized, tools/list, tools/call.
       operationId: mcpRootPost
       security:
         - bearerAuth: []
@@ -34,10 +35,12 @@ paths:
           application/json:
             schema:
               oneOf:
-                - $ref: '#/components/schemas/JsonRpcRequest'
-                - type: array
-                  items:
-                    $ref: '#/components/schemas/JsonRpcRequest'
+                - $ref: '#/components/schemas/InitializeRequest'
+                - $ref: '#/components/schemas/NotificationsInitializedRequest'
+                - $ref: '#/components/schemas/PingRequest'
+                - $ref: '#/components/schemas/ToolsListRequest'
+                - $ref: '#/components/schemas/ToolsCallRequest'
+                - $ref: '#/components/schemas/BatchRpcRequest'
             examples:
               initialize:
                 value:
@@ -48,15 +51,15 @@ paths:
                     protocolVersion: "2025-03-26"
                     capabilities: {}
                     clientInfo:
-                      name: "demo-client"
-                      version: "1.0.0"
+                      name: demo-client
+                      version: 1.0.0
               toolsList:
                 value:
                   jsonrpc: "2.0"
                   id: 2
                   method: tools/list
                   params: {}
-              toolsCall:
+              createOrderCall:
                 value:
                   jsonrpc: "2.0"
                   id: 3
@@ -72,25 +75,20 @@ paths:
                       pay_method: bsc
       responses:
         '200':
-          description: JSON-RPC response
+          description: JSON-RPC response object or batch response
           content:
             application/json:
               schema:
                 oneOf:
                   - $ref: '#/components/schemas/JsonRpcSuccess'
                   - $ref: '#/components/schemas/JsonRpcError'
-                  - type: array
-                    items:
-                      oneOf:
-                        - $ref: '#/components/schemas/JsonRpcSuccess'
-                        - $ref: '#/components/schemas/JsonRpcError'
+                  - $ref: '#/components/schemas/BatchRpcResponse'
         '204':
           description: No content (notification)
 
   /api/mcp/rpc:
     post:
-      summary: MCP JSON-RPC endpoint (alias)
-      description: Same behavior as /api/mcp.
+      summary: MCP JSON-RPC endpoint alias
       operationId: mcpRpcPost
       security:
         - bearerAuth: []
@@ -100,33 +98,28 @@ paths:
           application/json:
             schema:
               oneOf:
-                - $ref: '#/components/schemas/JsonRpcRequest'
-                - type: array
-                  items:
-                    $ref: '#/components/schemas/JsonRpcRequest'
+                - $ref: '#/components/schemas/InitializeRequest'
+                - $ref: '#/components/schemas/NotificationsInitializedRequest'
+                - $ref: '#/components/schemas/PingRequest'
+                - $ref: '#/components/schemas/ToolsListRequest'
+                - $ref: '#/components/schemas/ToolsCallRequest'
+                - $ref: '#/components/schemas/BatchRpcRequest'
       responses:
         '200':
-          description: JSON-RPC response
+          description: JSON-RPC response object or batch response
           content:
             application/json:
               schema:
                 oneOf:
                   - $ref: '#/components/schemas/JsonRpcSuccess'
                   - $ref: '#/components/schemas/JsonRpcError'
-                  - type: array
-                    items:
-                      oneOf:
-                        - $ref: '#/components/schemas/JsonRpcSuccess'
-                        - $ref: '#/components/schemas/JsonRpcError'
+                  - $ref: '#/components/schemas/BatchRpcResponse'
         '204':
           description: No content (notification)
 
   /api/mcp/bootstrap/email/request:
     post:
       summary: Request bootstrap token by email
-      description: |
-        Starts email bootstrap flow.
-        Server sends a 2-hour bootstrap token (mbt_...) to the email inbox.
       operationId: mcpBootstrapEmailRequest
       requestBody:
         required: true
@@ -148,8 +141,7 @@ paths:
 
   /api/mcp/bootstrap/email/exchange:
     post:
-      summary: Exchange bootstrap token for MCP access token
-      description: Exchange one-time bootstrap token (mbt_...) to MCP bearer token.
+      summary: Exchange bootstrap token to MCP access token
       operationId: mcpBootstrapEmailExchange
       requestBody:
         required: true
@@ -186,28 +178,6 @@ components:
         - type: number
         - type: 'null'
 
-    JsonRpcRequest:
-      type: object
-      required: [jsonrpc, method]
-      properties:
-        jsonrpc:
-          type: string
-          enum: ["2.0"]
-        id:
-          $ref: '#/components/schemas/JsonRpcId'
-        method:
-          type: string
-          enum:
-            - initialize
-            - notifications/initialized
-            - ping
-            - tools/list
-            - tools/call
-        params:
-          type: object
-          additionalProperties: true
-      additionalProperties: false
-
     JsonRpcSuccess:
       type: object
       required: [jsonrpc, id, result]
@@ -218,15 +188,14 @@ components:
         id:
           $ref: '#/components/schemas/JsonRpcId'
         result:
+          description: |
+            Result payload.
+            For tools/call it usually contains:
+            - content: [{ type: "text", text: "..." }]
+            - structuredContent: { ...tool response... }
+            - isError: false|true
           type: object
           additionalProperties: true
-          description: |
-            For tools/call, result typically includes:
-            {
-              content: [{ type: "text", text: "..." }],
-              structuredContent: { ...tool payload... },
-              isError: false|true
-            }
 
     JsonRpcError:
       type: object
@@ -250,6 +219,605 @@ components:
             data:
               nullable: true
 
+    RpcRequestBase:
+      type: object
+      required: [jsonrpc, method, params]
+      properties:
+        jsonrpc:
+          type: string
+          enum: ["2.0"]
+        id:
+          $ref: '#/components/schemas/JsonRpcId'
+        method:
+          type: string
+        params:
+          type: object
+      additionalProperties: false
+
+    InitializeRequest:
+      allOf:
+        - $ref: '#/components/schemas/RpcRequestBase'
+        - type: object
+          required: [id]
+          properties:
+            method:
+              type: string
+              enum: [initialize]
+            params:
+              $ref: '#/components/schemas/InitializeParams'
+
+    NotificationsInitializedRequest:
+      allOf:
+        - $ref: '#/components/schemas/RpcRequestBase'
+        - type: object
+          properties:
+            method:
+              type: string
+              enum: [notifications/initialized]
+            params:
+              type: object
+              additionalProperties: true
+
+    PingRequest:
+      allOf:
+        - $ref: '#/components/schemas/RpcRequestBase'
+        - type: object
+          required: [id]
+          properties:
+            method:
+              type: string
+              enum: [ping]
+            params:
+              type: object
+              additionalProperties: true
+
+    ToolsListRequest:
+      allOf:
+        - $ref: '#/components/schemas/RpcRequestBase'
+        - type: object
+          required: [id]
+          properties:
+            method:
+              type: string
+              enum: [tools/list]
+            params:
+              type: object
+              additionalProperties: true
+
+    ToolsCallRequest:
+      allOf:
+        - $ref: '#/components/schemas/RpcRequestBase'
+        - type: object
+          required: [id]
+          properties:
+            method:
+              type: string
+              enum: [tools/call]
+            params:
+              $ref: '#/components/schemas/ToolCallParams'
+
+    BatchRpcRequest:
+      type: array
+      items:
+        oneOf:
+          - $ref: '#/components/schemas/InitializeRequest'
+          - $ref: '#/components/schemas/NotificationsInitializedRequest'
+          - $ref: '#/components/schemas/PingRequest'
+          - $ref: '#/components/schemas/ToolsListRequest'
+          - $ref: '#/components/schemas/ToolsCallRequest'
+
+    BatchRpcResponse:
+      type: array
+      items:
+        oneOf:
+          - $ref: '#/components/schemas/JsonRpcSuccess'
+          - $ref: '#/components/schemas/JsonRpcError'
+
+    InitializeParams:
+      type: object
+      properties:
+        protocolVersion:
+          type: string
+          example: "2025-03-26"
+        capabilities:
+          type: object
+          additionalProperties: true
+        clientInfo:
+          type: object
+          properties:
+            name:
+              type: string
+            version:
+              type: string
+          additionalProperties: true
+      additionalProperties: true
+
+    ToolCallParams:
+      oneOf:
+        - $ref: '#/components/schemas/CreateUserToolCall'
+        - $ref: '#/components/schemas/ListAddressesToolCall'
+        - $ref: '#/components/schemas/CreateAddressToolCall'
+        - $ref: '#/components/schemas/SetBuyerWalletToolCall'
+        - $ref: '#/components/schemas/ListWalletsToolCall'
+        - $ref: '#/components/schemas/SearchProductsToolCall'
+        - $ref: '#/components/schemas/EstimateShippingToolCall'
+        - $ref: '#/components/schemas/CreateOrderToolCall'
+        - $ref: '#/components/schemas/CreateEscrowToolCall'
+        - $ref: '#/components/schemas/FundEscrowToolCall'
+        - $ref: '#/components/schemas/ConfirmReceiptToolCall'
+        - $ref: '#/components/schemas/OpenDisputeToolCall'
+        - $ref: '#/components/schemas/VoteDisputeToolCall'
+        - $ref: '#/components/schemas/ExecuteDisputeToolCall'
+        - $ref: '#/components/schemas/ResolveTimeoutToolCall'
+        - $ref: '#/components/schemas/SubmitTxToolCall'
+        - $ref: '#/components/schemas/GetOrderProofToolCall'
+      discriminator:
+        propertyName: name
+        mapping:
+          create_user: '#/components/schemas/CreateUserToolCall'
+          list_addresses: '#/components/schemas/ListAddressesToolCall'
+          create_address: '#/components/schemas/CreateAddressToolCall'
+          set_buyer_wallet: '#/components/schemas/SetBuyerWalletToolCall'
+          list_wallets: '#/components/schemas/ListWalletsToolCall'
+          search_products: '#/components/schemas/SearchProductsToolCall'
+          estimate_shipping: '#/components/schemas/EstimateShippingToolCall'
+          create_order: '#/components/schemas/CreateOrderToolCall'
+          create_escrow: '#/components/schemas/CreateEscrowToolCall'
+          fund_escrow: '#/components/schemas/FundEscrowToolCall'
+          confirm_receipt: '#/components/schemas/ConfirmReceiptToolCall'
+          open_dispute: '#/components/schemas/OpenDisputeToolCall'
+          vote_dispute: '#/components/schemas/VoteDisputeToolCall'
+          execute_dispute: '#/components/schemas/ExecuteDisputeToolCall'
+          resolve_timeout: '#/components/schemas/ResolveTimeoutToolCall'
+          submit_tx: '#/components/schemas/SubmitTxToolCall'
+          get_order_proof: '#/components/schemas/GetOrderProofToolCall'
+
+    ToolCallBase:
+      type: object
+      required: [name, arguments]
+      properties:
+        name:
+          type: string
+        arguments:
+          type: object
+      additionalProperties: false
+
+    EmptyArguments:
+      type: object
+      additionalProperties: false
+
+    # Tool call wrappers
+    CreateUserToolCall:
+      allOf:
+        - $ref: '#/components/schemas/ToolCallBase'
+        - type: object
+          properties:
+            name:
+              type: string
+              enum: [create_user]
+            arguments:
+              $ref: '#/components/schemas/CreateUserArgs'
+
+    ListAddressesToolCall:
+      allOf:
+        - $ref: '#/components/schemas/ToolCallBase'
+        - type: object
+          properties:
+            name:
+              type: string
+              enum: [list_addresses]
+            arguments:
+              $ref: '#/components/schemas/ListAddressesArgs'
+
+    CreateAddressToolCall:
+      allOf:
+        - $ref: '#/components/schemas/ToolCallBase'
+        - type: object
+          properties:
+            name:
+              type: string
+              enum: [create_address]
+            arguments:
+              $ref: '#/components/schemas/CreateAddressArgs'
+
+    SetBuyerWalletToolCall:
+      allOf:
+        - $ref: '#/components/schemas/ToolCallBase'
+        - type: object
+          properties:
+            name:
+              type: string
+              enum: [set_buyer_wallet]
+            arguments:
+              $ref: '#/components/schemas/SetBuyerWalletArgs'
+
+    ListWalletsToolCall:
+      allOf:
+        - $ref: '#/components/schemas/ToolCallBase'
+        - type: object
+          properties:
+            name:
+              type: string
+              enum: [list_wallets]
+            arguments:
+              $ref: '#/components/schemas/ListWalletsArgs'
+
+    SearchProductsToolCall:
+      allOf:
+        - $ref: '#/components/schemas/ToolCallBase'
+        - type: object
+          properties:
+            name:
+              type: string
+              enum: [search_products]
+            arguments:
+              $ref: '#/components/schemas/SearchProductsArgs'
+
+    EstimateShippingToolCall:
+      allOf:
+        - $ref: '#/components/schemas/ToolCallBase'
+        - type: object
+          properties:
+            name:
+              type: string
+              enum: [estimate_shipping]
+            arguments:
+              $ref: '#/components/schemas/EstimateShippingArgs'
+
+    CreateOrderToolCall:
+      allOf:
+        - $ref: '#/components/schemas/ToolCallBase'
+        - type: object
+          properties:
+            name:
+              type: string
+              enum: [create_order]
+            arguments:
+              $ref: '#/components/schemas/CreateOrderArgs'
+
+    CreateEscrowToolCall:
+      allOf:
+        - $ref: '#/components/schemas/ToolCallBase'
+        - type: object
+          properties:
+            name:
+              type: string
+              enum: [create_escrow]
+            arguments:
+              $ref: '#/components/schemas/CreateEscrowArgs'
+
+    FundEscrowToolCall:
+      allOf:
+        - $ref: '#/components/schemas/ToolCallBase'
+        - type: object
+          properties:
+            name:
+              type: string
+              enum: [fund_escrow]
+            arguments:
+              $ref: '#/components/schemas/FundEscrowArgs'
+
+    ConfirmReceiptToolCall:
+      allOf:
+        - $ref: '#/components/schemas/ToolCallBase'
+        - type: object
+          properties:
+            name:
+              type: string
+              enum: [confirm_receipt]
+            arguments:
+              $ref: '#/components/schemas/ConfirmReceiptArgs'
+
+    OpenDisputeToolCall:
+      allOf:
+        - $ref: '#/components/schemas/ToolCallBase'
+        - type: object
+          properties:
+            name:
+              type: string
+              enum: [open_dispute]
+            arguments:
+              $ref: '#/components/schemas/OpenDisputeArgs'
+
+    VoteDisputeToolCall:
+      allOf:
+        - $ref: '#/components/schemas/ToolCallBase'
+        - type: object
+          properties:
+            name:
+              type: string
+              enum: [vote_dispute]
+            arguments:
+              $ref: '#/components/schemas/VoteDisputeArgs'
+
+    ExecuteDisputeToolCall:
+      allOf:
+        - $ref: '#/components/schemas/ToolCallBase'
+        - type: object
+          properties:
+            name:
+              type: string
+              enum: [execute_dispute]
+            arguments:
+              $ref: '#/components/schemas/ExecuteDisputeArgs'
+
+    ResolveTimeoutToolCall:
+      allOf:
+        - $ref: '#/components/schemas/ToolCallBase'
+        - type: object
+          properties:
+            name:
+              type: string
+              enum: [resolve_timeout]
+            arguments:
+              $ref: '#/components/schemas/ResolveTimeoutArgs'
+
+    SubmitTxToolCall:
+      allOf:
+        - $ref: '#/components/schemas/ToolCallBase'
+        - type: object
+          properties:
+            name:
+              type: string
+              enum: [submit_tx]
+            arguments:
+              $ref: '#/components/schemas/SubmitTxArgs'
+
+    GetOrderProofToolCall:
+      allOf:
+        - $ref: '#/components/schemas/ToolCallBase'
+        - type: object
+          properties:
+            name:
+              type: string
+              enum: [get_order_proof]
+            arguments:
+              $ref: '#/components/schemas/GetOrderProofArgs'
+
+    # Tool argument schemas
+    CreateUserArgs:
+      type: object
+      required: [user_id, user_name]
+      properties:
+        user_id:
+          type: integer
+        user_name:
+          type: string
+      additionalProperties: true
+
+    ListAddressesArgs:
+      allOf:
+        - $ref: '#/components/schemas/EmptyArguments'
+
+    CreateAddressArgs:
+      type: object
+      required:
+        - country_code
+        - country_name
+        - state
+        - city
+        - street_line1
+        - recipient_name
+        - recipient_phone
+      properties:
+        country_code:
+          type: string
+          example: RU
+        country_name:
+          type: string
+          example: Russia
+        state:
+          type: string
+          example: Moscow
+        city:
+          type: string
+          example: Moscow
+        district:
+          type: string
+        street_line1:
+          type: string
+        street_line2:
+          type: string
+        postcode:
+          type: string
+        recipient_name:
+          type: string
+        recipient_phone:
+          type: string
+        is_default:
+          type: boolean
+      additionalProperties: true
+
+    SetBuyerWalletArgs:
+      type: object
+      required: [address, chain_id]
+      properties:
+        address:
+          type: string
+          example: "0x6818384322B0B49adD9568Fc7Fa7A1eb2bD566F2"
+        chain_id:
+          type: integer
+          example: 56
+        is_primary:
+          type: boolean
+        bind_method:
+          type: string
+          example: injected
+      additionalProperties: true
+
+    ListWalletsArgs:
+      type: object
+      properties:
+        chain_id:
+          type: integer
+      additionalProperties: true
+
+    SearchProductsArgs:
+      type: object
+      required: [keyword]
+      properties:
+        keyword:
+          type: string
+        page_no:
+          type: integer
+          minimum: 1
+        page_size:
+          type: integer
+          minimum: 1
+      additionalProperties: true
+
+    EstimateShippingArgs:
+      type: object
+      required: [shipping_address_id, shop_id, item_id, quantity]
+      properties:
+        shipping_address_id:
+          type: integer
+        shop_id:
+          type: string
+        item_id:
+          type: string
+        sku_id:
+          type: string
+        quantity:
+          type: integer
+          minimum: 1
+      additionalProperties: true
+
+    CreateOrderArgs:
+      type: object
+      required:
+        - shipping_address_id
+        - shop_id
+        - item_id
+        - quantity
+        - shipping_quote_id
+        - pay_method
+      properties:
+        shipping_address_id:
+          type: integer
+        shop_id:
+          type: string
+        item_id:
+          type: string
+        sku_id:
+          type: string
+        quantity:
+          type: integer
+          minimum: 1
+        shipping_quote_id:
+          type: string
+        pay_method:
+          type: string
+          example: bsc
+      additionalProperties: true
+
+    CreateEscrowArgs:
+      type: object
+      required: [order_no, token_symbol]
+      properties:
+        order_no:
+          type: string
+        token_symbol:
+          type: string
+          example: USDT
+        buyer_wallet:
+          type: string
+        seller_wallet:
+          type: string
+      additionalProperties: true
+
+    FundEscrowArgs:
+      type: object
+      required: [order_no, token_symbol]
+      properties:
+        order_no:
+          type: string
+        token_symbol:
+          type: string
+      additionalProperties: true
+
+    ConfirmReceiptArgs:
+      type: object
+      required: [order_no]
+      properties:
+        order_no:
+          type: string
+      additionalProperties: true
+
+    OpenDisputeArgs:
+      type: object
+      description: |
+        Dispute arguments may evolve by backend version.
+        Keep additional fields pass-through when integrating.
+      properties:
+        order_no:
+          type: string
+        escrow_id:
+          type: string
+        reason:
+          type: string
+      additionalProperties: true
+
+    VoteDisputeArgs:
+      type: object
+      description: |
+        Vote arguments may evolve by backend version.
+        Keep additional fields pass-through when integrating.
+      properties:
+        order_no:
+          type: string
+        escrow_id:
+          type: string
+        decision:
+          type: string
+      additionalProperties: true
+
+    ExecuteDisputeArgs:
+      type: object
+      description: |
+        Execute dispute arguments may evolve by backend version.
+        Keep additional fields pass-through when integrating.
+      properties:
+        order_no:
+          type: string
+        escrow_id:
+          type: string
+      additionalProperties: true
+
+    ResolveTimeoutArgs:
+      type: object
+      description: |
+        Timeout resolution arguments may evolve by backend version.
+        Keep additional fields pass-through when integrating.
+      properties:
+        order_no:
+          type: string
+        escrow_id:
+          type: string
+      additionalProperties: true
+
+    SubmitTxArgs:
+      type: object
+      required: [order_no, action, tx_hash]
+      properties:
+        order_no:
+          type: string
+        action:
+          type: string
+          enum: [create, fund, confirm, dispute, release, refund]
+        tx_hash:
+          type: string
+          pattern: '^0x[a-fA-F0-9]{64}$'
+      additionalProperties: true
+
+    GetOrderProofArgs:
+      type: object
+      required: [order_no]
+      properties:
+        order_no:
+          type: string
+      additionalProperties: true
+
     McpBootstrapEmailRequest:
       type: object
       required: [email]
@@ -269,6 +837,7 @@ components:
         message:
           type: string
           example: If the email is registered, a bootstrap token has been sent. Please check your inbox.
+      additionalProperties: true
 
     McpBootstrapEmailExchangeRequest:
       type: object
@@ -276,11 +845,12 @@ components:
       properties:
         bootstrap_token:
           type: string
-          description: One-time bootstrap token from email inbox
+          description: One-time bootstrap token from mailbox
         ttl_sec:
           type: integer
           minimum: 1
           description: Optional requested access token ttl
+      additionalProperties: true
 
     McpBootstrapEmailExchangeResponse:
       type: object
@@ -304,3 +874,4 @@ components:
         provider:
           type: string
           example: mcp_email_bootstrap
+      additionalProperties: true
