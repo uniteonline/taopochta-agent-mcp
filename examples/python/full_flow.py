@@ -19,6 +19,7 @@ import json
 import os
 import sys
 import time
+import base64
 import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional
@@ -72,6 +73,23 @@ def to_int(value: Any, fallback: int) -> int:
         return int(float(value))
     except Exception:
         return fallback
+
+
+def decode_jwt_sub_unsafe(token: str) -> Optional[int]:
+    try:
+        parts = str(token or "").split(".")
+        if len(parts) < 2:
+            return None
+        payload_part = parts[1]
+        padding = "=" * ((4 - len(payload_part) % 4) % 4)
+        payload_json = base64.urlsafe_b64decode((payload_part + padding).encode("utf-8")).decode("utf-8")
+        payload = json.loads(payload_json)
+        sub = payload.get("sub")
+        if sub is None:
+            return None
+        return int(sub)
+    except Exception:
+        return None
 
 
 def parse_tool_result(raw: Dict[str, Any]) -> Any:
@@ -270,6 +288,52 @@ def issue_mcp_token(
     return data
 
 
+def register_mcp_client(
+    register_url: str,
+    bootstrap_token: str,
+    user_id: int,
+    client_id: str,
+    display_name: str,
+    scope: str,
+    access_ttl_sec: int,
+    refresh_ttl_sec: int,
+) -> Dict[str, Any]:
+    body: Dict[str, Any] = {
+        "auto_issue_token": True,
+        "fixed_sub": int(user_id),
+    }
+    if client_id:
+        body["client_id"] = client_id
+    if display_name:
+        body["display_name"] = display_name
+    if scope:
+        body["scope"] = scope
+    if access_ttl_sec > 0:
+        body["ttl_sec"] = int(access_ttl_sec)
+    if refresh_ttl_sec > 0:
+        body["refresh_ttl_sec"] = int(refresh_ttl_sec)
+
+    payload_bytes = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        register_url,
+        data=payload_bytes,
+        method="POST",
+        headers={
+            "content-type": "application/json",
+            "authorization": f"Bearer {bootstrap_token}",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        text = resp.read().decode("utf-8")
+        data = json.loads(text) if text else {}
+
+    resolved_client_id = first_string(data.get("client_id"), data.get("client", {}).get("client_id"))
+    resolved_secret = first_string(data.get("client_secret"))
+    if not resolved_client_id or not resolved_secret:
+        raise RuntimeError(f"Register endpoint returned invalid client credentials: {data}")
+    return data
+
+
 class McpClient:
     def __init__(self, endpoint: str, token: str) -> None:
         self.endpoint = endpoint
@@ -331,24 +395,66 @@ def main() -> None:
     endpoint = resolve_mcp_endpoint(base_url_input, os.getenv("MCP_ENDPOINT", ""))
     api_base_url = derive_api_base_url(base_url_input)
     token_url = first_string(os.getenv("MCP_TOKEN_URL"), f"{api_base_url}/api/mcp/token")
+    register_url = first_string(os.getenv("MCP_REGISTER_URL"), f"{api_base_url}/api/mcp/clients/register")
 
-    user_id = to_int(os.getenv("MCP_USER_ID", str(int(time.time() * 1000))), int(time.time() * 1000))
+    user_id_env = first_string(os.getenv("MCP_USER_ID"))
+    user_id = to_int(user_id_env, int(time.time() * 1000))
     token = first_string(os.getenv("MCP_TOKEN"))
+    bootstrap_token = first_string(os.getenv("MCP_BOOTSTRAP_USER_TOKEN"))
+    auto_register_client = first_string(os.getenv("MCP_AUTO_REGISTER_CLIENT"), "true").lower() in ("1", "true", "yes", "on")
+    client_id = first_string(os.getenv("MCP_CLIENT_ID"))
+    client_secret = first_string(os.getenv("MCP_CLIENT_SECRET"))
+    register_client_id = first_string(os.getenv("MCP_REGISTER_CLIENT_ID"))
+    register_display_name = first_string(os.getenv("MCP_REGISTER_DISPLAY_NAME"), f"mcp_python_{user_id}")
+    register_scope = first_string(os.getenv("MCP_REGISTER_SCOPE"))
+    access_ttl = to_int(os.getenv("MCP_ACCESS_TOKEN_TTL_SEC", "0"), 0)
+    refresh_ttl = to_int(os.getenv("MCP_REFRESH_TOKEN_TTL_SEC", "0"), 0)
+
+    provided_sub = decode_jwt_sub_unsafe(token) if token else None
+    bootstrap_sub = decode_jwt_sub_unsafe(bootstrap_token) if bootstrap_token else None
+    if provided_sub is not None:
+        user_id = provided_sub
+    elif not user_id_env and bootstrap_sub is not None:
+        user_id = bootstrap_sub
+
     if not token:
-        client_id = first_string(os.getenv("MCP_CLIENT_ID"))
-        client_secret = first_string(os.getenv("MCP_CLIENT_SECRET"))
         if not client_id or not client_secret:
-            raise RuntimeError("MCP_TOKEN is not set. Please set MCP_CLIENT_ID and MCP_CLIENT_SECRET.")
-        token_resp = issue_mcp_token(
-            token_url=token_url,
-            client_id=client_id,
-            client_secret=client_secret,
-            user_id=user_id,
-            access_ttl_sec=to_int(os.getenv("MCP_ACCESS_TOKEN_TTL_SEC", "0"), 0),
-            refresh_ttl_sec=to_int(os.getenv("MCP_REFRESH_TOKEN_TTL_SEC", "0"), 0),
-        )
-        token = token_resp["access_token"]
-        print("[auth] token issued by /api/mcp/token")
+            if auto_register_client and bootstrap_token:
+                register_resp = register_mcp_client(
+                    register_url=register_url,
+                    bootstrap_token=bootstrap_token,
+                    user_id=user_id,
+                    client_id=register_client_id,
+                    display_name=register_display_name,
+                    scope=register_scope,
+                    access_ttl_sec=access_ttl,
+                    refresh_ttl_sec=refresh_ttl,
+                )
+                client_id = first_string(register_resp.get("client_id"), register_resp.get("client", {}).get("client_id"))
+                client_secret = first_string(register_resp.get("client_secret"))
+                token = first_string(register_resp.get("token_bundle", {}).get("access_token"), register_resp.get("access_token"))
+                print(f"[auth] mcp client self-registered: {client_id}")
+            else:
+                raise RuntimeError(
+                    "MCP_TOKEN is not set. Provide MCP_CLIENT_ID/MCP_CLIENT_SECRET or MCP_BOOTSTRAP_USER_TOKEN."
+                )
+        if not token:
+            if not client_id or not client_secret:
+                raise RuntimeError("Unable to resolve client credentials after self-register.")
+            token_resp = issue_mcp_token(
+                token_url=token_url,
+                client_id=client_id,
+                client_secret=client_secret,
+                user_id=user_id,
+                access_ttl_sec=access_ttl,
+                refresh_ttl_sec=refresh_ttl,
+            )
+            token = token_resp["access_token"]
+            print("[auth] token issued by /api/mcp/token")
+
+    final_sub = decode_jwt_sub_unsafe(token)
+    if final_sub is not None:
+        user_id = final_sub
 
     keyword = os.getenv("MCP_KEYWORD", "watercup")
     pay_method = os.getenv("MCP_PAY_METHOD", "bsc")

@@ -192,6 +192,102 @@ paths:
         '401':
           description: Invalid client credentials
 
+  /api/mcp/clients/register:
+    post:
+      summary: Self-register MCP client credentials
+      description: |
+        Register a new MCP client for the current logged-in user and return one-time `client_secret`.
+        Requires a normal user bearer token (Google/Yandex/Telegram login token), not MCP client token.
+      operationId: mcpClientRegister
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/McpClientRegisterRequest'
+      responses:
+        '200':
+          description: Client registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpClientRegisterResponse'
+        '400':
+          description: Invalid request
+        '401':
+          description: Unauthorized
+
+  /api/mcp/clients/list:
+    post:
+      summary: List my MCP clients
+      operationId: mcpClientList
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Client list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpClientListResponse'
+        '401':
+          description: Unauthorized
+
+  /api/mcp/clients/rotate-secret:
+    post:
+      summary: Rotate MCP client secret
+      description: |
+        Rotate secret for a client owned by current user.
+        Returns one-time new `client_secret`.
+      operationId: mcpClientRotateSecret
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/McpClientRotateRequest'
+      responses:
+        '200':
+          description: Secret rotated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpClientRotateResponse'
+        '400':
+          description: Invalid request
+        '401':
+          description: Unauthorized
+
+  /api/mcp/clients/revoke:
+    post:
+      summary: Revoke MCP client
+      description: |
+        Revoke a client owned by current user and revoke all refresh tokens of that client.
+      operationId: mcpClientRevoke
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/McpClientRevokeRequest'
+      responses:
+        '200':
+          description: Client revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpClientRevokeResponse'
+        '400':
+          description: Invalid request
+        '401':
+          description: Unauthorized
+
 components:
   securitySchemes:
     bearerAuth:
@@ -384,6 +480,186 @@ components:
                 type: string
                 format: date-time
                 nullable: true
+
+    McpClientInfo:
+      type: object
+      properties:
+        client_id:
+          type: string
+        owner_user_id:
+          type: integer
+        owner_email:
+          type: string
+        display_name:
+          type: string
+          nullable: true
+        fixed_sub:
+          type: integer
+        allowed_subs:
+          type: array
+          items:
+            type: integer
+        scope:
+          type: string
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_rotated_at:
+          type: string
+          format: date-time
+          nullable: true
+        revoked_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    McpClientRegisterRequest:
+      type: object
+      properties:
+        client_id:
+          type: string
+          description: Optional custom client id
+        display_name:
+          type: string
+          maxLength: 160
+        fixed_sub:
+          type: integer
+          minimum: 1
+        allowed_subs:
+          type: array
+          items:
+            type: integer
+        scope:
+          type: string
+        auto_issue_token:
+          type: boolean
+          default: true
+        ttl_sec:
+          type: integer
+          minimum: 1
+        refresh_ttl_sec:
+          type: integer
+          minimum: 1
+
+    McpClientRegisterResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        client_id:
+          type: string
+        client_secret:
+          type: string
+          description: One-time visible secret
+        client:
+          $ref: '#/components/schemas/McpClientInfo'
+        token_bundle:
+          $ref: '#/components/schemas/McpTokenResponse'
+
+    McpClientListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        total:
+          type: integer
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/McpClientInfo'
+
+    McpClientRotateRequest:
+      type: object
+      required: [client_id]
+      properties:
+        client_id:
+          type: string
+        auto_issue_token:
+          type: boolean
+          default: false
+        scope:
+          type: string
+        ttl_sec:
+          type: integer
+          minimum: 1
+        refresh_ttl_sec:
+          type: integer
+          minimum: 1
+
+    McpClientRotateResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        client_id:
+          type: string
+        client_secret:
+          type: string
+          description: One-time visible secret
+        client:
+          type: object
+          properties:
+            client_id:
+              type: string
+            fixed_sub:
+              type: integer
+            allowed_subs:
+              type: array
+              items:
+                type: integer
+            scope:
+              type: string
+            updated_at:
+              type: string
+              format: date-time
+              nullable: true
+            last_rotated_at:
+              type: string
+              format: date-time
+              nullable: true
+        token_bundle:
+          $ref: '#/components/schemas/McpTokenResponse'
+
+    McpClientRevokeRequest:
+      type: object
+      required: [client_id]
+      properties:
+        client_id:
+          type: string
+        reason:
+          type: string
+          maxLength: 256
+
+    McpClientRevokeResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        client_id:
+          type: string
+        is_active:
+          type: boolean
+        revoked_at:
+          type: string
+          format: date-time
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+        revoked_refresh_tokens:
+          type: integer
 
   examples:
     ToolsCallCreateEscrow:

@@ -56,6 +56,10 @@ Your API service should expose:
 - `POST /api/mcp/rpc` (optional alias)
 - `POST /api/mcp/token` (issue access token)
 - `POST /api/mcp/token/revoke` (revoke refresh token)
+- `POST /api/mcp/clients/register` (self-register MCP client)
+- `POST /api/mcp/clients/list` (list my MCP clients)
+- `POST /api/mcp/clients/rotate-secret` (self-rotate secret)
+- `POST /api/mcp/clients/revoke` (revoke MCP client)
 
 ### 2) Environment (recommended)
 
@@ -64,11 +68,31 @@ Use direct MCP endpoint URL as default:
 ```bash
 export MCP_BASE_URL="https://taopochta.ru/api/mcp"
 export MCP_TOKEN_URL="https://taopochta.ru/api/mcp/token"
-export MCP_CLIENT_ID="your_agent_client_id"
-export MCP_CLIENT_SECRET="your_agent_client_secret"
+export MCP_REGISTER_URL="https://taopochta.ru/api/mcp/clients/register"
+export MCP_BOOTSTRAP_USER_TOKEN="user_login_access_token"
 export MCP_USER_ID="$(date +%s)"
 export MCP_BUYER_WALLET="0xYourBuyerWalletAddress"
 ```
+
+First-time self-service (recommended):
+
+1. Set `MCP_BOOTSTRAP_USER_TOKEN` (a normal user login token from your site login).
+2. Run the script without `MCP_CLIENT_ID/MCP_CLIENT_SECRET`.
+3. Script auto calls `/api/mcp/clients/register` and obtains MCP token.
+
+After you have persistent client credentials, you can switch to:
+
+```bash
+export MCP_CLIENT_ID="your_agent_client_id"
+export MCP_CLIENT_SECRET="your_agent_client_secret"
+unset MCP_BOOTSTRAP_USER_TOKEN
+```
+
+How to get `MCP_BOOTSTRAP_USER_TOKEN`:
+
+- Login on `taopochta.ru` with Google/Yandex/Telegram.
+- Use that normal login access token as `MCP_BOOTSTRAP_USER_TOKEN`.
+- It is only needed to create/rotate/revoke MCP client credentials.
 
 If your deployment uses root host + endpoint path:
 
@@ -88,8 +112,8 @@ PowerShell:
 ```powershell
 $env:MCP_BASE_URL="https://taopochta.ru/api/mcp"
 $env:MCP_TOKEN_URL="https://taopochta.ru/api/mcp/token"
-$env:MCP_CLIENT_ID="your_agent_client_id"
-$env:MCP_CLIENT_SECRET="your_agent_client_secret"
+$env:MCP_REGISTER_URL="https://taopochta.ru/api/mcp/clients/register"
+$env:MCP_BOOTSTRAP_USER_TOKEN="user_login_access_token"
 $env:MCP_USER_ID=[int][double]::Parse((Get-Date -UFormat %s))
 $env:MCP_BUYER_WALLET="0xYourBuyerWalletAddress"
 ```
@@ -170,8 +194,14 @@ Security rule: payment amount must come from server-side quote (`create_order` /
 | `MCP_BASE_URL` | Yes | `https://taopochta.ru/api/mcp` | MCP endpoint URL (recommended) or host root |
 | `MCP_ENDPOINT` | No | `/api/mcp` | Needed only when `MCP_BASE_URL` is host root |
 | `MCP_TOKEN_URL` | No | `https://taopochta.ru/api/mcp/token` | Token issue endpoint |
-| `MCP_CLIENT_ID` | Yes* | `agent_demo` | OAuth client id |
-| `MCP_CLIENT_SECRET` | Yes* | `replace_me` | OAuth client secret |
+| `MCP_REGISTER_URL` | No | `https://taopochta.ru/api/mcp/clients/register` | Self-register endpoint |
+| `MCP_BOOTSTRAP_USER_TOKEN` | Yes** | `eyJ...` | Normal site login token for self-register |
+| `MCP_AUTO_REGISTER_CLIENT` | No | `true` | Auto register MCP client when creds missing |
+| `MCP_CLIENT_ID` | Yes* | `agent_demo` | MCP client id |
+| `MCP_CLIENT_SECRET` | Yes* | `replace_me` | MCP client secret |
+| `MCP_REGISTER_CLIENT_ID` | No | `agent_bot_a` | Optional custom client_id when self-registering |
+| `MCP_REGISTER_DISPLAY_NAME` | No | `My Agent Prod` | Optional display name for self-register |
+| `MCP_REGISTER_SCOPE` | No | `mcp:tools` | Optional scope for self-register |
 | `MCP_TOKEN` | Optional | `eyJ...` | Pre-issued bearer token (skip token issue call) |
 | `MCP_USER_ID` | Optional | `1771301696853` | `sub` claim used for token issuing |
 | `MCP_ACCESS_TOKEN_TTL_SEC` | Optional | `900` | Requested access-token TTL |
@@ -182,7 +212,9 @@ Security rule: payment amount must come from server-side quote (`create_order` /
 | `FUND_TX_HASH` | Optional | `0x...` | Auto submit fund tx |
 | `CONFIRM_TX_HASH` | Optional | `0x...` | Auto submit confirm tx |
 
-\* Required only when `MCP_TOKEN` is not provided.
+\* Required when `MCP_TOKEN` is not provided and self-register mode is not used.
+
+\** Required for first-time self-register mode when `MCP_CLIENT_ID/MCP_CLIENT_SECRET` are missing.
 
 ## Repo Structure
 
@@ -228,12 +260,12 @@ taopochta-agent-mcp/
 
 ### Быстрый старт (15 минут)
 
-1. Убедитесь, что API публикует `POST /api/mcp`, `POST /api/mcp/token` (и при необходимости `/api/mcp/rpc`, `/api/mcp/token/revoke`).
+1. Убедитесь, что API публикует `POST /api/mcp`, `POST /api/mcp/token`, `POST /api/mcp/clients/register` (и при необходимости `/api/mcp/rpc`, `/api/mcp/token/revoke`).
 2. Задайте переменные окружения:
    - `MCP_BASE_URL=https://taopochta.ru/api/mcp`
    - `MCP_TOKEN_URL=https://taopochta.ru/api/mcp/token`
-   - `MCP_CLIENT_ID=...`
-   - `MCP_CLIENT_SECRET=...`
+   - `MCP_REGISTER_URL=https://taopochta.ru/api/mcp/clients/register`
+   - `MCP_BOOTSTRAP_USER_TOKEN=...`
    - `MCP_BUYER_WALLET=0x...`
 3. Проверьте MCP:
    - `bash examples/curl/01_initialize.sh`

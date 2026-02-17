@@ -26,6 +26,19 @@ function toInt(value: unknown, fallback: number): number {
   return Math.floor(n);
 }
 
+function decodeJwtSubUnsafe(token: string): number {
+  try {
+    const parts = String(token || '').split('.');
+    if (parts.length < 2) return NaN;
+    const payloadRaw = Buffer.from(parts[1], 'base64url').toString('utf8');
+    const payload = JSON.parse(payloadRaw);
+    const n = Number(payload?.sub);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : NaN;
+  } catch {
+    return NaN;
+  }
+}
+
 function deriveApiBaseUrl(rawBaseUrl: string): string {
   const base = trimSlash(rawBaseUrl);
   if (base.endsWith('/api/mcp')) return trimSlash(base.slice(0, -'/api/mcp'.length));
@@ -77,6 +90,45 @@ async function issueMcpToken(params: {
   }
   if (!firstString(json?.access_token)) {
     throw new Error(`Token endpoint returned no access_token: ${text}`);
+  }
+  return json;
+}
+
+async function registerMcpClient(params: {
+  registerUrl: string;
+  bootstrapToken: string;
+  userId: number;
+  clientId: string;
+  displayName: string;
+  scope: string;
+  accessTtlSec: number;
+  refreshTtlSec: number;
+}): Promise<any> {
+  const body: Record<string, any> = { auto_issue_token: true };
+  if (params.userId > 0) body.fixed_sub = params.userId;
+  if (params.clientId) body.client_id = params.clientId;
+  if (params.displayName) body.display_name = params.displayName;
+  if (params.scope) body.scope = params.scope;
+  if (params.accessTtlSec > 0) body.ttl_sec = params.accessTtlSec;
+  if (params.refreshTtlSec > 0) body.refresh_ttl_sec = params.refreshTtlSec;
+
+  const resp = await fetch(params.registerUrl, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${params.bootstrapToken}`,
+    },
+    body: JSON.stringify(body),
+  });
+  const text = await resp.text();
+  const json = text ? JSON.parse(text) : {};
+  if (!resp.ok) {
+    throw new Error(`Failed to register MCP client (${resp.status}): ${text}`);
+  }
+  const clientId = firstString(json?.client_id, json?.client?.client_id);
+  const clientSecret = firstString(json?.client_secret);
+  if (!clientId || !clientSecret) {
+    throw new Error(`Register endpoint returned invalid credentials: ${text}`);
   }
   return json;
 }
@@ -279,27 +331,72 @@ async function main(): Promise<void> {
   const endpoint = resolveMcpEndpoint(baseUrlInput, firstString(process.env.MCP_ENDPOINT));
   const apiBaseUrl = deriveApiBaseUrl(baseUrlInput);
   const tokenUrl = firstString(process.env.MCP_TOKEN_URL, `${apiBaseUrl}/api/mcp/token`);
-  const userId = toInt(process.env.MCP_USER_ID || Date.now(), Date.now());
-  const clientId = firstString(process.env.MCP_CLIENT_ID);
-  const clientSecret = firstString(process.env.MCP_CLIENT_SECRET);
+  const registerUrl = firstString(
+    process.env.MCP_REGISTER_URL,
+    `${apiBaseUrl}/api/mcp/clients/register`,
+  );
+  const userIdRaw = firstString(process.env.MCP_USER_ID);
+  let userId = toInt(userIdRaw || Date.now(), Date.now());
+  const bootstrapToken = firstString(process.env.MCP_BOOTSTRAP_USER_TOKEN);
+  const autoRegisterClient = ['1', 'true', 'yes', 'on'].includes(
+    firstString(process.env.MCP_AUTO_REGISTER_CLIENT, 'true').toLowerCase(),
+  );
+  let clientId = firstString(process.env.MCP_CLIENT_ID);
+  let clientSecret = firstString(process.env.MCP_CLIENT_SECRET);
+  const registerClientId = firstString(process.env.MCP_REGISTER_CLIENT_ID);
+  const registerDisplayName = firstString(process.env.MCP_REGISTER_DISPLAY_NAME, `mcp_node_${userId}`);
+  const registerScope = firstString(process.env.MCP_REGISTER_SCOPE);
   const accessTokenTtlSec = toInt(process.env.MCP_ACCESS_TOKEN_TTL_SEC, 0);
   const refreshTokenTtlSec = toInt(process.env.MCP_REFRESH_TOKEN_TTL_SEC, 0);
   let token = firstString(process.env.MCP_TOKEN);
+  const providedSub = token ? decodeJwtSubUnsafe(token) : NaN;
+  const bootstrapSub = bootstrapToken ? decodeJwtSubUnsafe(bootstrapToken) : NaN;
+  if (Number.isFinite(providedSub)) {
+    userId = providedSub;
+  } else if (!userIdRaw && Number.isFinite(bootstrapSub)) {
+    userId = bootstrapSub;
+  }
   if (!token) {
     if (!clientId || !clientSecret) {
-      throw new Error('MCP_TOKEN is not set. Please set MCP_CLIENT_ID and MCP_CLIENT_SECRET.');
+      if (autoRegisterClient && bootstrapToken) {
+        const registerResp = await registerMcpClient({
+          registerUrl,
+          bootstrapToken,
+          userId,
+          clientId: registerClientId,
+          displayName: registerDisplayName,
+          scope: registerScope,
+          accessTtlSec: accessTokenTtlSec,
+          refreshTtlSec: refreshTokenTtlSec,
+        });
+        clientId = firstString(registerResp?.client_id, registerResp?.client?.client_id);
+        clientSecret = firstString(registerResp?.client_secret);
+        token = firstString(registerResp?.token_bundle?.access_token, registerResp?.access_token);
+        console.log('[auth] mcp client self-registered:', clientId);
+      } else {
+        throw new Error(
+          'MCP_TOKEN is not set. Provide MCP_CLIENT_ID/MCP_CLIENT_SECRET or MCP_BOOTSTRAP_USER_TOKEN.',
+        );
+      }
     }
-    const tokenResp = await issueMcpToken({
-      tokenUrl,
-      clientId,
-      clientSecret,
-      userId,
-      accessTtlSec: accessTokenTtlSec,
-      refreshTtlSec: refreshTokenTtlSec,
-    });
-    token = tokenResp.access_token;
-    console.log('[auth] token issued by /api/mcp/token');
+    if (!token) {
+      if (!clientId || !clientSecret) {
+        throw new Error('Unable to resolve client credentials after self-register.');
+      }
+      const tokenResp = await issueMcpToken({
+        tokenUrl,
+        clientId,
+        clientSecret,
+        userId,
+        accessTtlSec: accessTokenTtlSec,
+        refreshTtlSec: refreshTokenTtlSec,
+      });
+      token = tokenResp.access_token;
+      console.log('[auth] token issued by /api/mcp/token');
+    }
   }
+  const finalSub = decodeJwtSubUnsafe(token);
+  if (Number.isFinite(finalSub)) userId = finalSub;
   const keyword = process.env.MCP_KEYWORD || 'watercup';
   const payMethod = process.env.MCP_PAY_METHOD || 'bsc';
   const tokenSymbol = (process.env.MCP_TOKEN_SYMBOL || 'USDT').toUpperCase();
