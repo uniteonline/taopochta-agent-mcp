@@ -36,6 +36,17 @@ product search -> shipping estimate -> order creation -> escrow create/fund/conf
 
 ### 2) Environment
 
+Recommended for agents (single MCP URL):
+
+```bash
+export MCP_BASE_URL="https://taopochta.ru/api/mcp"
+export AUTH_TOKEN_SECRET="dev-secret"
+export MCP_USER_ID="$(date +%s)"
+export MCP_BUYER_WALLET="0xYourBuyerWalletAddress"
+```
+
+For scripts in this repository (`MCP_BASE_URL + MCP_ENDPOINT` mode):
+
 ```bash
 export MCP_BASE_URL="https://taopochta.ru"
 export MCP_ENDPOINT="/api/mcp"
@@ -45,6 +56,15 @@ export MCP_BUYER_WALLET="0xYourBuyerWalletAddress"
 ```
 
 PowerShell:
+
+```powershell
+$env:MCP_BASE_URL="https://taopochta.ru/api/mcp"
+$env:AUTH_TOKEN_SECRET="dev-secret"
+$env:MCP_USER_ID=[int][double]::Parse((Get-Date -UFormat %s))
+$env:MCP_BUYER_WALLET="0xYourBuyerWalletAddress"
+```
+
+PowerShell for this repository scripts:
 
 ```powershell
 $env:MCP_BASE_URL="https://taopochta.ru"
@@ -57,17 +77,18 @@ $env:MCP_BUYER_WALLET="0xYourBuyerWalletAddress"
 For local development only:
 
 ```bash
-export MCP_BASE_URL="http://127.0.0.1:3000"
+export MCP_BASE_URL="http://127.0.0.1:3000/api/mcp"
 ```
 
-If you expose MCP through Nginx as `https://taopochta.ru/mcp`, set:
+If you expose MCP through Nginx as `https://taopochta.ru/mcp`, set single-URL mode as:
 
 ```bash
-export MCP_BASE_URL="https://taopochta.ru"
-export MCP_ENDPOINT="/mcp"
+export MCP_BASE_URL="https://taopochta.ru/mcp"
 ```
 
 ### 3) Probe MCP
+
+Use the "scripts in this repository" env mode above when running `examples/*` and `scripts/test-mcp-flow.js`.
 
 ```bash
 cd examples/curl
@@ -102,21 +123,21 @@ python full_flow.py
 
 ```mermaid
 flowchart LR
-  A[Agent / Client] --> B[MCP Endpoint /api/mcp]
-  B --> C[Tool Router]
-  C --> D[search_products]
-  C --> E[estimate_shipping]
-  C --> F[create_order]
-  C --> G[create_escrow]
-  C --> H[fund_escrow]
-  C --> I[confirm_receipt]
-  D --> J[Taopochta Product APIs]
-  E --> K[/api/items/shipping/estimate]
-  F --> L[Order Service]
-  G --> M[Escrow Contract on BSC]
+  A["Agent / Client"] --> B["MCP Endpoint /api/mcp"]
+  B --> C["Tool Router"]
+  C --> D["search_products"]
+  C --> E["estimate_shipping"]
+  C --> F["create_order"]
+  C --> G["create_escrow"]
+  C --> H["fund_escrow"]
+  C --> I["confirm_receipt"]
+  D --> J["Taopochta Product APIs"]
+  E --> K["/api/items/shipping/estimate"]
+  F --> L["Order Service"]
+  G --> M["Escrow Contract on BSC"]
   H --> M
   I --> M
-  M --> N[submit_tx + get_order_proof]
+  M --> N["submit_tx + get_order_proof"]
   N --> A
 ```
 
@@ -162,8 +183,8 @@ Security rule: payment amount must come from server-side order quote (`create_or
 
 | Name | Required | Example | Purpose |
 |---|---|---|---|
-| `MCP_BASE_URL` | Yes | `https://taopochta.ru` | API base URL |
-| `MCP_ENDPOINT` | No | `/api/mcp` | MCP endpoint path |
+| `MCP_BASE_URL` | Yes | `https://taopochta.ru/api/mcp` | MCP URL (recommended for agents) |
+| `MCP_ENDPOINT` | No | `/api/mcp` | Extra endpoint path used by this repo scripts |
 | `AUTH_TOKEN_SECRET` | Local yes | `dev-secret` | JWT signing secret |
 | `MCP_TOKEN` | Optional | `eyJ...` | If unset, examples generate token |
 | `MCP_USER_ID` | Optional | `1771301696853` | JWT `sub` |
